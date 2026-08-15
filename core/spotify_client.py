@@ -639,41 +639,18 @@ class SpotifyClient:
 
     @property
     def _deezer(self):
-        """Lazy-load Deezer client for metadata fallback"""
-        if self._deezer_client is None:
-            from core.deezer_client import DeezerClient
-            self._deezer_client = DeezerClient()
-            logger.info("Deezer fallback client initialized")
-        return self._deezer_client
+        return self._itunes  # Music Lite: removed provider fallback
 
     @property
     def _discogs(self):
-        """Lazy-load Discogs client for metadata fallback"""
-        if self._discogs_client is None:
-            from core.discogs_client import DiscogsClient
-            self._discogs_client = DiscogsClient()
-            logger.info("Discogs fallback client initialized")
-        return self._discogs_client
+        return self._itunes  # Music Lite: removed provider fallback
 
     @property
     def _fallback_source(self) -> str:
-        """Get configured primary metadata source for internal fallback routing."""
-        try:
-            return config_manager.get('metadata.fallback_source', 'deezer') or 'deezer'
-        except Exception:
-            return 'deezer'
+        return "itunes"
 
     @property
     def _fallback(self):
-        """Get the active fallback metadata client based on settings"""
-        if self._fallback_source == 'deezer':
-            return self._deezer
-        if self._fallback_source == 'discogs':
-            # Only use Discogs if token is configured
-            token = config_manager.get('discogs.token', '')
-            if token:
-                return self._discogs
-            return self._itunes  # Fall back to iTunes if no Discogs token
         return self._itunes
 
     def _free_selected(self) -> bool:

@@ -1868,35 +1868,10 @@ class WatchlistScanner:
         return None
 
     def _match_to_deezer(self, artist_name: str) -> Optional[str]:
-        """Match artist name to Deezer ID using fuzzy name comparison."""
-        try:
-            # Try MetadataService fallback client (if it's Deezer)
-            if hasattr(self, '_metadata_service') and self._metadata_service:
-                client = self._metadata_service.itunes  # Named 'itunes' but may be DeezerClient
-                from core.deezer_client import DeezerClient
-                if isinstance(client, DeezerClient):
-                    results = client.search_artists(artist_name, limit=5)
-                    return self._best_artist_match(results, artist_name)
-
-            # Fallback: use cached Deezer client
-            from core.metadata.registry import get_deezer_client
-            client = get_deezer_client()
-            results = client.search_artists(artist_name, limit=5)
-            return self._best_artist_match(results, artist_name)
-        except Exception as e:
-            logger.warning(f"Could not match {artist_name} to Deezer: {e}")
-        return None
+        return None  # Music Lite: Deezer matching removed
 
     def _match_to_discogs(self, artist_name: str) -> Optional[str]:
-        """Match artist name to Discogs ID using fuzzy name comparison."""
-        try:
-            from core.metadata.registry import get_discogs_client
-            client = get_discogs_client()
-            results = client.search_artists(artist_name, limit=5)
-            return self._best_artist_match(results, artist_name)
-        except Exception as e:
-            logger.warning(f"Could not match {artist_name} to Discogs: {e}")
-        return None
+        return None  # Music Lite: Discogs matching removed
 
     def _match_to_musicbrainz(self, artist_name: str) -> Optional[str]:
         """Match artist name to MusicBrainz ID using fuzzy name comparison."""
@@ -4417,7 +4392,7 @@ class WatchlistScanner:
 
         Runs at most once per week (throttled via config key 'lastfm_radio.last_generated').
         Requires a Last.fm API key to be configured.
-        Stores playlists in DB under playlist_type='lastfm_radio' via ListenBrainzManager.
+        Stores playlists in the dedicated Last.fm Radio store.
         """
         try:
             from datetime import datetime, timedelta
@@ -4451,11 +4426,11 @@ class WatchlistScanner:
             logger.info(f"Last.fm radio: generating playlists for {len(top_tracks)} top tracks")
 
             from core.lastfm_client import LastFMClient
-            from core.listenbrainz_manager import ListenBrainzManager
+            from core.playlists.lastfm_store import LastFMPlaylistStore
 
             client = LastFMClient(api_key=api_key)
-            # Use profile_id=1 as a sensible default; the scanner runs globally
-            lb_manager = ListenBrainzManager(str(db.database_path), profile_id=1)
+            # Use profile_id=1 as a sensible default; the scanner runs globally.
+            lastfm_store = LastFMPlaylistStore(str(db.database_path), profile_id=1)
 
             generated = 0
             for track in top_tracks:
@@ -4470,7 +4445,7 @@ class WatchlistScanner:
                         logger.info(f"Last.fm radio: no similar tracks for '{artist_name} - {track_name}'")
                         continue
 
-                    playlist_mbid = lb_manager.save_lastfm_radio_playlist(track_name, artist_name, similar)
+                    playlist_mbid = lastfm_store.save_lastfm_radio_playlist(track_name, artist_name, similar)
                     logger.info(
                         f"Last.fm radio: saved '{track_name}' by '{artist_name}' "
                         f"→ {playlist_mbid} ({len(similar)} tracks)"

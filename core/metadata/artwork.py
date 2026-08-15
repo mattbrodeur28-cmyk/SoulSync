@@ -282,12 +282,8 @@ def _upgrade_art_url(art_url: str) -> str:
     elif "mzstatic.com" in art_url:
         return re.sub(r"\d+x\d+bb", "3000x3000bb", art_url)
     elif "dzcdn" in art_url:
-        try:
-            from core.deezer_client import _upgrade_deezer_cover_url
-
-            return _upgrade_deezer_cover_url(art_url)
-        except Exception as e:
-            logger.debug("upgrade deezer image url failed: %s", e)
+        # Legacy cached Deezer artwork URL: preserve as-is; provider removed.
+        return art_url
     elif "coverartarchive.org" in art_url:
         # MusicBrainz art arrives as Cover Art Archive thumbnails
         # (/front-250 — see musicbrainz_search._cover_art_url). Upgrade to the

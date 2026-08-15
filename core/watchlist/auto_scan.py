@@ -366,44 +366,6 @@ def process_watchlist_scan_automatically(automation_id=None, profile_id=None, de
                     deps.update_automation_progress(automation_id,
                                                  log_line=f'Discovery pool error: {discovery_error}', log_type='error')
 
-                # Update ListenBrainz playlists cache
-                logger.info("Starting ListenBrainz playlists update...")
-                deps.watchlist_scan_state['current_phase'] = 'updating_listenbrainz'
-                deps.update_automation_progress(automation_id, progress=97, phase='Updating ListenBrainz',
-                                             log_line='Fetching ListenBrainz playlists...', log_type='info')
-                try:
-                    from core.listenbrainz_manager import ListenBrainzManager
-                    db = get_database()
-                    db_path = str(db.database_path)
-                    lb_profiles = db.get_profiles_with_listenbrainz()
-                    if lb_profiles:
-                        for lb_prof in lb_profiles:
-                            lb_manager = ListenBrainzManager(db_path, profile_id=lb_prof['id'], token=lb_prof['token'], base_url=lb_prof['base_url'])
-                            lb_result = lb_manager.update_all_playlists()
-                            if lb_result.get('success'):
-                                summary = lb_result.get('summary', {})
-                                logger.info(f"ListenBrainz update complete for profile {lb_prof['id']}: {summary}")
-                                deps.update_automation_progress(automation_id,
-                                                             log_line=f'ListenBrainz (profile {lb_prof["id"]}): playlists updated', log_type='success')
-                    else:
-                        lb_manager = ListenBrainzManager(db_path)
-                        lb_result = lb_manager.update_all_playlists()
-                        if lb_result.get('success'):
-                            summary = lb_result.get('summary', {})
-                            logger.info(f"ListenBrainz update complete (global): {summary}")
-                            deps.update_automation_progress(automation_id,
-                                                         log_line='ListenBrainz: playlists updated', log_type='success')
-                        else:
-                            logger.error(f"ListenBrainz update had issues: {lb_result.get('error', 'Unknown error')}")
-                            deps.update_automation_progress(automation_id,
-                                                         log_line=f'ListenBrainz: {lb_result.get("error", "Unknown error")}', log_type='error')
-                except Exception as lb_error:
-                    logger.error(f"Error updating ListenBrainz: {lb_error}")
-                    import traceback
-                    traceback.print_exc()
-                    deps.update_automation_progress(automation_id,
-                                                 log_line=f'ListenBrainz error: {lb_error}', log_type='error')
-
                 # Update current seasonal playlist (weekly refresh)
                 logger.info("Starting seasonal content update...")
                 deps.watchlist_scan_state['current_phase'] = 'updating_seasonal'

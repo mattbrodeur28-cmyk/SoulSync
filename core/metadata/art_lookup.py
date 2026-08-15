@@ -183,24 +183,7 @@ def _caa_art(artist: str, album: str, metadata: dict) -> Optional[str]:
 
 
 def _deezer_art(artist: str, album: str, metadata: dict) -> Optional[str]:
-    from core.metadata.registry import get_deezer_client
-    client = get_deezer_client()
-    if not client:
-        return None
-    data = client.search_album(artist, album)
-    if not data:
-        return None
-    got_album, got_artist = _result_album_artist(data)
-    if not _album_matches(artist, album, got_artist, got_album):
-        return None
-    url = data.get("cover_xl") or data.get("cover_big") or data.get("cover_medium")
-    if not url:
-        return None
-    try:
-        from core.deezer_client import _upgrade_deezer_cover_url
-        return _upgrade_deezer_cover_url(url)
-    except Exception:
-        return url
+    return None  # Music Lite: Deezer artwork source removed
 
 
 def _itunes_art(artist: str, album: str, metadata: dict) -> Optional[str]:

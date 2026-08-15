@@ -115,13 +115,7 @@ class SoulIDWorker:
         return self._itunes_client
 
     def _get_deezer_client(self):
-        if self._deezer_client is None:
-            try:
-                from core.deezer_client import DeezerClient
-                self._deezer_client = DeezerClient()
-            except Exception as e:
-                logger.error(f"Failed to init Deezer client: {e}")
-        return self._deezer_client
+        return None  # Music Lite: Deezer lookup removed
 
     def _get_matching_engine(self):
         if self._matching_engine is None:

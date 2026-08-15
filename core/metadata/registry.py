@@ -240,19 +240,11 @@ def _get_itunes_factory(client_factory: Optional[MetadataClientFactory]) -> Meta
 
 
 def _get_deezer_factory(client_factory: Optional[MetadataClientFactory]) -> MetadataClientFactory:
-    if client_factory is not None:
-        return client_factory
-    from core.deezer_client import DeezerClient
-
-    return DeezerClient
+    return None  # Music Lite: Deezer implementation removed
 
 
 def _get_discogs_factory(client_factory: Optional[MetadataClientFactory]) -> MetadataClientFactory:
-    if client_factory is not None:
-        return client_factory
-    from core.discogs_client import DiscogsClient
-
-    return DiscogsClient
+    return None  # Music Lite: Discogs implementation removed
 
 
 def _get_amazon_factory(client_factory: Optional[MetadataClientFactory]) -> MetadataClientFactory:
@@ -393,16 +385,7 @@ def get_spotify_client_for_profile(profile_id: Optional[int] = None):
 
 
 def get_deezer_client(client_factory: Optional[MetadataClientFactory] = None):
-    """Get cached Deezer client keyed by current access token."""
-    current_token = _get_config_value("deezer.access_token", None)
-    cache_key = f"deezer::{current_token or ''}"
-    factory = _get_deezer_factory(client_factory)
-    with _client_cache_lock:
-        client = _client_cache.get(cache_key)
-        if client is None:
-            client = factory()
-            _client_cache[cache_key] = client
-        return client
+    return None  # Music Lite compatibility shim
 
 
 def get_itunes_client(client_factory: Optional[MetadataClientFactory] = None):
@@ -421,20 +404,7 @@ def get_discogs_client(
     token: Optional[str] = None,
     client_factory: Optional[MetadataClientFactory] = None,
 ):
-    """Get cached Discogs client keyed by token."""
-    if token is None:
-        current_token = _get_config_value("discogs.token", "") or ""
-    else:
-        current_token = token or ""
-
-    cache_key = f"discogs::{current_token}"
-    factory = _get_discogs_factory(client_factory)
-    with _client_cache_lock:
-        client = _client_cache.get(cache_key)
-        if client is None:
-            client = factory(token=current_token or None)  # type: ignore[misc]
-            _client_cache[cache_key] = client
-        return client
+    return None  # Music Lite compatibility shim
 
 
 def get_amazon_client(client_factory: Optional[MetadataClientFactory] = None):

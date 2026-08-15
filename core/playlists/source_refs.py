@@ -150,14 +150,6 @@ def normalize_mirrored_source_ref(
         canonical_url = _canonical_youtube_url(source_ref)
         return MirroredSourceRef(_short_hash(canonical_url), canonical_url)
 
-    if source == "deezer" and source_ref.startswith(("http://", "https://")):
-        from core.deezer_client import DeezerClient
-
-        parsed_id = DeezerClient.parse_playlist_url(source_ref)
-        if not parsed_id:
-            raise ValueError("Use a valid Deezer playlist URL or playlist ID")
-        return MirroredSourceRef(str(parsed_id), existing_description or None)
-
     return MirroredSourceRef(source_ref, existing_description or None)
 
 

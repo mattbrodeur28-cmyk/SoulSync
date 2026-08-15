@@ -15,7 +15,6 @@ from core.jellyfin_client import JellyfinClient
 from core.metadata.registry import get_primary_source
 from core.plex_client import PlexClient
 from core.spotify_client import SpotifyClient
-from core.tidal_client import TidalClient
 from utils.async_helpers import run_async
 
 logger = logging.getLogger(__name__)
@@ -93,7 +92,7 @@ def run_service_test(service, test_config):
                          return True, "Spotify (no-auth) connection successful!"
                      # Using a different fallback metadata source
                      fb_src = _get_metadata_fallback_source()
-                     fallback_name = 'Deezer' if fb_src == 'deezer' else 'Discogs' if fb_src == 'discogs' else 'iTunes'
+                     fallback_name = 'iTunes'
                      if spotify_configured:
                          return True, f"{fallback_name} connection successful! (Spotify configured but not authenticated)"
                      else:
@@ -101,13 +100,7 @@ def run_service_test(service, test_config):
             else:
                  return False, "Music service authentication failed. Check credentials and complete OAuth flow in browser if prompted."
         elif service == "tidal":
-            temp_client = TidalClient()
-            if temp_client.is_authenticated():
-                user_info = temp_client.get_user_info()
-                username = user_info.get('display_name', 'Tidal User') if user_info else 'Tidal User'
-                return True, f"Tidal connection successful! Connected as: {username}"
-            else:
-                return False, "Tidal authentication failed. Please use the 'Authenticate' button and complete the flow in your browser."
+            return False, "Tidal is not available in SoulSync Music Lite."
         elif service == "plex":
             temp_client = PlexClient()
             if temp_client.is_connected():

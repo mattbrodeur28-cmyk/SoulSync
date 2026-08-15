@@ -1,10 +1,7 @@
 """Last.fm radio playlist source adapter.
 
 Last.fm radio playlists are persisted by
-``ListenBrainzManager.save_lastfm_radio_playlist`` under
-``playlist_type='lastfm_radio'`` in the ``listenbrainz_playlists``
-table — they share the same storage as ListenBrainz playlists but
-originate from Last.fm's similar-tracks API.
+the dedicated Music Lite ``LastFMPlaylistStore``.
 
 Like ListenBrainz, tracks are MB metadata only, so ``needs_discovery``
 is True on every track.
@@ -21,10 +18,7 @@ from core.playlists.sources.base import (
     PlaylistSource,
     SOURCE_LASTFM,
 )
-from core.playlists.sources.listenbrainz import (
-    DiscoverCallable,
-    ListenBrainzPlaylistSource,
-)
+DiscoverCallable = Callable[[List[Dict[str, Any]]], List[Optional[Dict[str, Any]]]]
 
 
 LASTFM_PLAYLIST_TYPE = "lastfm_radio"
@@ -100,7 +94,59 @@ class LastFMPlaylistSource(PlaylistSource):
 
     # Discovery shares the LB adapter's implementation — same track
     # shape (MB metadata), same matching needs.
-    discover_tracks = ListenBrainzPlaylistSource.discover_tracks
+    def discover_tracks(self, tracks: List[NormalizedTrack]) -> List[NormalizedTrack]:
+        """Resolve Last.fm radio tracks through the shared discovery callable."""
+        if not tracks or self._discover_callable is None:
+            return tracks
+
+        to_match: List[Dict[str, Any]] = []
+        match_indices: List[int] = []
+        for idx, track in enumerate(tracks):
+            if not track.needs_discovery:
+                continue
+            to_match.append({
+                "track_name": track.track_name,
+                "artist_name": track.artist_name,
+                "album_name": track.album_name or "",
+                "duration_ms": track.duration_ms or 0,
+            })
+            match_indices.append(idx)
+
+        if not to_match:
+            return tracks
+
+        try:
+            matched = self._discover_callable(to_match) or []
+        except Exception:
+            return tracks
+
+        out = list(tracks)
+        for slot_idx, result in zip(match_indices, matched, strict=False):
+            if not result:
+                continue
+            track = out[slot_idx]
+            result = dict(result)
+            provider = result.pop("_provider", None) or "unknown"
+            confidence = result.pop("_confidence", None)
+            extra = dict(track.extra or {})
+            extra["discovered"] = True
+            extra["provider"] = provider
+            if confidence is not None:
+                extra["confidence"] = confidence
+            extra["matched_data"] = result
+            out[slot_idx] = NormalizedTrack(
+                position=track.position,
+                track_name=track.track_name,
+                artist_name=track.artist_name,
+                album_name=track.album_name,
+                duration_ms=track.duration_ms,
+                source_track_id=result.get("id") or track.source_track_id,
+                image_url=result.get("image_url") or track.image_url,
+                needs_discovery=False,
+                extra=extra,
+            )
+        return out
+
 
     # ---- projection helpers ------------------------------------------------
 

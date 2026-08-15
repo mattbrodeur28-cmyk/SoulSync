@@ -412,52 +412,9 @@ class ListeningStatsWorker:
                 conn.close()
 
     def _scrobble_new_events(self):
-        """Scrobble unscrobbled listening events to ListenBrainz and Last.fm."""
+        """Scrobble unscrobbled listening events to Last.fm."""
         conn = None
         try:
-            # ListenBrainz scrobbling
-            if self.config_manager.get('listenbrainz.scrobble_enabled', False):
-                lb_token = self.config_manager.get('listenbrainz.token', '')
-                if lb_token:
-                    conn = self.db._get_connection()
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        SELECT id, title, artist, album, played_at
-                        FROM listening_history
-                        WHERE scrobbled_listenbrainz = 0
-                        ORDER BY played_at ASC
-                        LIMIT 500
-                    """)
-                    rows = cursor.fetchall()
-                    conn.close()
-                    conn = None
-
-                    if rows:
-                        try:
-                            from core.listenbrainz_client import ListenBrainzClient
-                            lb_client = ListenBrainzClient(token=lb_token)
-                            if lb_client.is_authenticated():
-                                listens = [{
-                                    'artist': r[2] or '',
-                                    'track': r[1] or '',
-                                    'album': r[3] or '',
-                                    'timestamp': r[4],
-                                } for r in rows]
-
-                                if lb_client.submit_listens(listens):
-                                    # Mark as scrobbled
-                                    ids = [r[0] for r in rows]
-                                    conn = self.db._get_connection()
-                                    cursor = conn.cursor()
-                                    placeholders = ','.join(['?'] * len(ids))
-                                    cursor.execute(f"UPDATE listening_history SET scrobbled_listenbrainz = 1 WHERE id IN ({placeholders})", ids)
-                                    conn.commit()
-                                    conn.close()
-                                    conn = None
-                                    logger.info(f"Scrobbled {len(ids)} events to ListenBrainz")
-                        except Exception as e:
-                            logger.debug(f"ListenBrainz scrobble failed: {e}")
-
             # Last.fm scrobbling
             if self.config_manager.get('lastfm.scrobble_enabled', False):
                 api_key = self.config_manager.get('lastfm.api_key', '')

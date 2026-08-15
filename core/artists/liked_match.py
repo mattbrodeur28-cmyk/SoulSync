@@ -90,7 +90,6 @@ def _match_liked_artists_to_all_sources(database, profile_id: int):
         return url
 
     # Build search clients for each source
-    from core.deezer_client import DeezerClient
     search_clients = {}
     if spotify_client and spotify_client.is_spotify_authenticated():
         search_clients['spotify'] = spotify_client

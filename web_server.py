@@ -96,7 +96,6 @@ from core.jellyfin_client import JellyfinClient
 from core.navidrome_client import NavidromeClient
 from core.soulseek_client import SoulseekClient
 from core.download_orchestrator import DownloadOrchestrator, set_download_orchestrator
-from core.tidal_client import TidalClient # Added import for Tidal
 from core.matching_engine import MusicMatchingEngine
 from core.database_update_worker import DatabaseUpdateWorker
 from core.web_scan_manager import WebScanManager
@@ -882,47 +881,7 @@ _profile_tidal_lock = threading.Lock()
 
 
 def get_tidal_client_for_profile(profile_id=None):
-    """Get the Tidal client for a profile's OWN playlists, or the global one.
-
-    A profile that has connected its own Tidal account gets a dedicated client
-    seeded with its tokens (refreshed via the shared/global app creds). Crucially
-    its token refresh is redirected to the profile row, so a per-profile refresh
-    never overwrites the global tidal_tokens the app runs on. Admin (profile 1)
-    and unconnected profiles use the global client unchanged."""
-    if profile_id is None:
-        profile_id = get_current_profile_id()
-    if not profile_id or profile_id == 1:
-        return tidal_client
-    try:
-        toks = get_database().get_profile_tidal(profile_id) or {}
-    except Exception:
-        return tidal_client
-    if not toks.get('access_token') and not toks.get('refresh_token'):
-        return tidal_client
-    with _profile_tidal_lock:
-        cached = _profile_tidal_clients.get(profile_id)
-        if cached is not None:
-            return cached
-        try:
-            c = TidalClient()
-            c.access_token = toks.get('access_token') or None
-            c.refresh_token = toks.get('refresh_token') or None
-            c.token_expires_at = 0  # force a refresh check on first use
-            if c.access_token:
-                c.session.headers['Authorization'] = f'Bearer {c.access_token}'
-            # Redirect token persistence to the PROFILE, never the global slot.
-            _pid = profile_id
-            def _save_to_profile(_c=c, _p=_pid):
-                try:
-                    get_database().set_profile_tidal_tokens(_p, _c.access_token, _c.refresh_token)
-                except Exception as e:
-                    logger.debug("per-profile Tidal token save failed: %s", e)
-            c._save_tokens = _save_to_profile
-            _profile_tidal_clients[profile_id] = c
-            return c
-        except Exception as e:
-            logger.error("per-profile Tidal client build failed for %s: %s", profile_id, e)
-            return tidal_client
+    return None  # Music Lite: Tidal provider removed
 
 
 def clear_profile_tidal_client(profile_id):
@@ -1399,14 +1358,15 @@ def _register_automation_handlers():
 
     from core.watchlist_scanner import get_watchlist_scanner as _get_watchlist_scanner_fn
 
-    # ListenBrainz / Last.fm are profile-scoped, so the manager getter
-    # resolves the current profile's manager on each call. iTunes-link
-    # parsing lives as a module helper rather than a class — wrap it in
-    # a callable that matches the adapter contract.
-    def _lb_manager_for_registry():
+    # Last.fm radio persistence is profile-scoped and independent from
+    # removed ListenBrainz integration.
+    def _lastfm_store_for_registry():
         try:
-            manager, _username, _source = _get_profile_lb_manager()
-            return manager
+            from core.playlists.lastfm_store import LastFMPlaylistStore
+            return LastFMPlaylistStore(
+                str(get_database().database_path),
+                profile_id=get_current_profile_id(),
+            )
         except Exception:
             return None
 
@@ -1445,7 +1405,7 @@ def _register_automation_handlers():
         spotify_client_getter=get_spotify_client_for_profile,
         youtube_parser=parse_youtube_playlist,
         itunes_link_parser=_itunes_link_parser_for_registry,
-        lastfm_manager_getter=_lb_manager_for_registry,
+        lastfm_manager_getter=_lastfm_store_for_registry,
         personalized_manager_getter=_build_personalized_manager,
         profile_id_getter=get_current_profile_id,
         discover_callable=_discover_callable_for_registry,
@@ -23973,7 +23933,7 @@ def get_discover_album(source, album_id):
             # string like "3:45") so map to the standard
             # {name, track_number, duration_ms, artists} shape the
             # download modal expects.
-            from core.discogs_client import DiscogsClient
+            return jsonify({"success": False, "error": "Discogs is not available in Music Lite"}), 400
             try:
                 rel_id = int(album_id)
             except (TypeError, ValueError):
@@ -26341,32 +26301,8 @@ def _run_youtube_discovery_worker(url_hash):
 from core.discovery import listenbrainz as _discovery_listenbrainz
 
 
-def _build_listenbrainz_discovery_deps():
-    """Build the ListenbrainzDiscoveryDeps bundle from web_server.py globals on each call."""
-    return _discovery_listenbrainz.ListenbrainzDiscoveryDeps(
-        listenbrainz_playlist_states=listenbrainz_playlist_states,
-        spotify_client=spotify_client,
-        matching_engine=matching_engine,
-        pause_enrichment_workers=_pause_enrichment_workers,
-        resume_enrichment_workers=_resume_enrichment_workers,
-        get_active_discovery_source=_get_active_discovery_source,
-        get_metadata_fallback_client=_get_metadata_fallback_client,
-        get_discovery_cache_key=_get_discovery_cache_key,
-        get_database=get_database,
-        validate_discovery_cache_artist=_validate_discovery_cache_artist,
-        extract_artist_name=_extract_artist_name,
-        spotify_rate_limited=_spotify_rate_limited,
-        discovery_score_candidates=_discovery_score_candidates,
-        get_metadata_cache=get_metadata_cache,
-        build_discovery_wing_it_stub=_build_discovery_wing_it_stub,
-        add_activity_item=add_activity_item,
-    )
 
 
-def _run_listenbrainz_discovery_worker(state_key):
-    return _discovery_listenbrainz.run_listenbrainz_discovery_worker(
-        state_key, _build_listenbrainz_discovery_deps()
-    )
 
 
 def _calculate_similarity(str1, str2):
@@ -27839,18 +27775,6 @@ def set_profile_password_endpoint(profile_id):
 
 # --- Per-Profile ListenBrainz Settings ---
 
-def _get_lb_credentials_for_profile(profile_id=None):
-    """Get LB token + base_url for profile, falling back to global config."""
-    if profile_id is None:
-        profile_id = get_current_profile_id()
-    db = get_database()
-    settings = db.get_profile_listenbrainz(profile_id)
-    if settings and settings.get('token'):
-        return settings['token'], settings.get('base_url', ''), settings.get('username', ''), 'profile'
-    # Fallback to global config
-    return (config_manager.get('listenbrainz.token', ''),
-            config_manager.get('listenbrainz.base_url', ''),
-            None, 'global')
 
 def _validate_lb_token(token, base_url=''):
     """Validate a ListenBrainz token and return (success, username_or_error)"""
@@ -27915,17 +27839,6 @@ def _profile_tidal_connection(profile_id):
         return (False, None)
 
 
-def _profile_listenbrainz_connection(profile_id):
-    """(connected, username) for a profile's OWN ListenBrainz token."""
-    if not profile_id or profile_id == 1:
-        return (False, None)
-    try:
-        s = get_database().get_profile_listenbrainz(profile_id) or {}
-        if s.get('token'):
-            return (True, s.get('username'))
-    except Exception as e:
-        logger.debug("profile %s listenbrainz connection check failed: %s", profile_id, e)
-    return (False, None)
 
 
 @app.route('/api/profiles/me/connections', methods=['GET'])
@@ -27972,11 +27885,6 @@ def _disconnect_profile_tidal(pid):
     clear_profile_tidal_client(pid)
 
 
-def _disconnect_profile_listenbrainz(pid):
-    try:
-        get_database().clear_profile_listenbrainz(pid)
-    except Exception as e:
-        logger.debug("could not clear profile listenbrainz: %s", e)
 
 
 _PROFILE_DISCONNECTORS = {
@@ -28598,13 +28506,9 @@ def _run_playlist_export(job_id, playlist_id, title, mode):
     job = _playlist_export_jobs[job_id]
     try:
         # Service export (#945) — resolve to Spotify/Deezer track IDs and push.
-        if mode in ('spotify', 'deezer'):
+        if mode == 'spotify':
             db = get_database()
-            if mode == 'spotify':
-                client = get_spotify_client()
-            else:
-                from core.deezer_download_client import DeezerDownloadClient
-                client = DeezerDownloadClient()
+            client = get_spotify_client()
             _run_service_export(job, db, playlist_id, title, mode, client)
             return
 
@@ -28629,23 +28533,8 @@ def _run_playlist_export(job_id, playlist_id, title, mode):
         job['jspf'] = jspf
         job['stats'] = out['stats']
 
-        if mode == 'push':
-            job['phase'] = 'pushing'
-            from core.listenbrainz_client import ListenBrainzClient
-            client = ListenBrainzClient()
-            # Re-export updates the same LB playlist in place instead of duplicating it (#903).
-            existing = db.get_playlist_export_target(int(playlist_id), 'listenbrainz')
-            res = client.create_or_update_playlist(title, jspf['playlist']['track'], existing_mbid=existing)
-            job['push'] = res
-            if res.get('success'):
-                if res.get('playlist_mbid'):
-                    db.set_playlist_export_target(int(playlist_id), 'listenbrainz', res['playlist_mbid'])
-                job['phase'] = 'done'
-            else:
-                job['phase'] = 'error'
-                job['error'] = res.get('error') or 'ListenBrainz push failed'
-        else:
-            job['phase'] = 'done'
+        # Music Lite: ListenBrainz push export removed; JSPF download remains.
+        job['phase'] = 'done'
     except Exception as e:
         logger.error(f"[Playlist Export] job {job_id} failed: {e}")
         job['phase'] = 'error'
@@ -29458,34 +29347,6 @@ def start_watchlist_scan():
                         logger.info("Discovery pool population complete")
                     except Exception as discovery_error:
                         logger.error(f"Error populating discovery pool: {discovery_error}")
-                        import traceback
-                        traceback.print_exc()
-
-                    # Update ListenBrainz playlists cache
-                    logger.info("Starting ListenBrainz playlists update...")
-                    watchlist_scan_state['current_phase'] = 'updating_listenbrainz'
-                    try:
-                        from core.listenbrainz_manager import ListenBrainzManager
-                        db = get_database()
-                        db_path = str(db.database_path)
-                        # Update for all profiles with LB tokens
-                        lb_profiles = db.get_profiles_with_listenbrainz()
-                        if lb_profiles:
-                            for lb_prof in lb_profiles:
-                                lb_manager = ListenBrainzManager(db_path, profile_id=lb_prof['id'], token=lb_prof['token'], base_url=lb_prof['base_url'])
-                                lb_result = lb_manager.update_all_playlists()
-                                if lb_result.get('success'):
-                                    logger.info(f"ListenBrainz update complete for profile {lb_prof['id']}: {lb_result.get('summary', {})}")
-                        else:
-                            # Fallback: use global config token
-                            lb_manager = ListenBrainzManager(db_path)
-                            lb_result = lb_manager.update_all_playlists()
-                            if lb_result.get('success'):
-                                logger.info(f"ListenBrainz update complete (global): {lb_result.get('summary', {})}")
-                            elif lb_result.get('error'):
-                                logger.error(f"ListenBrainz update skipped: {lb_result.get('error')}")
-                    except Exception as lb_error:
-                        logger.error(f"Error updating ListenBrainz: {lb_error}")
                         import traceback
                         traceback.print_exc()
 
@@ -32784,12 +32645,12 @@ def _fetch_liked_albums(profile_id: int):
         elif not config_manager.get('discogs.token', ''):
             logger.info("[Your Albums] Discogs skipped (no token configured)")
         else:
-            from core.discogs_client import DiscogsClient
+            raise RuntimeError("Discogs is not available in Music Lite")
             discogs_cl = DiscogsClient()
             if discogs_cl.is_authenticated():
                 logger.info("[Your Albums] Fetching collection from Discogs...")
                 releases = discogs_cl.get_user_collection()
-                from core.discogs_client import _tag_discogs_album_id
+                raise RuntimeError("Discogs is not available in Music Lite")
                 for r in releases:
                     database.upsert_liked_album(
                         album_name=r['album_name'], artist_name=r['artist_name'],
@@ -33268,13 +33129,6 @@ def get_discover_genre_playlist(genre_name):
 # LISTENBRAINZ DISCOVER ENDPOINTS
 # ===============================
 
-def _get_profile_lb_manager():
-    """Create a profile-aware ListenBrainzManager for the current user.
-    Always uses the actual profile_id so each profile has its own playlist cache."""
-    from core.listenbrainz_manager import ListenBrainzManager
-    profile_id = get_current_profile_id()
-    token, base_url, username, source = _get_lb_credentials_for_profile(profile_id)
-    return ListenBrainzManager(str(get_database().database_path), profile_id=profile_id, token=token, base_url=base_url), username, source
 
 def _get_lb_discover_playlists(playlist_type):
     """Shared logic for the 3 LB discover endpoints"""
@@ -33411,9 +33265,15 @@ def lastfm_radio_generate():
         if not similar:
             return jsonify({"success": False, "error": "No similar tracks found on Last.fm"}), 404
 
-        # Persist to DB via manager
-        lb_manager, _username, _source = _get_profile_lb_manager()
-        playlist_mbid = lb_manager.save_lastfm_radio_playlist(track_name, artist_name, similar)
+        # Persist to dedicated Last.fm Radio storage.
+        from core.playlists.lastfm_store import LastFMPlaylistStore
+        lastfm_store = LastFMPlaylistStore(
+            str(get_database().database_path),
+            profile_id=get_current_profile_id(),
+        )
+        playlist_mbid = lastfm_store.save_lastfm_radio_playlist(
+            track_name, artist_name, similar
+        )
         title = f"Last.fm Radio: {track_name} by {artist_name}"
 
         # Build playlist dict that mirrors the LB playlist format expected by the discovery pipeline
@@ -33471,74 +33331,12 @@ def lastfm_radio_generate():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-@app.route('/api/discover/listenbrainz/lastfm-radio', methods=['GET'])
-def get_listenbrainz_lastfm_radio():
-    """Get cached Last.fm Radio playlists (from DB cache).
-
-    Does NOT require ListenBrainz authentication — Last.fm Radio playlists are
-    generated independently of the LB account.
-    """
-    try:
-        lb_manager, username, source = _get_profile_lb_manager()
-        playlists = lb_manager.get_cached_playlists('lastfm_radio')
-
-        formatted = [
-            {
-                "playlist": {
-                    "identifier": f"https://listenbrainz.org/playlist/{p['playlist_mbid']}",
-                    "title": p['title'],
-                    "creator": p['creator'],
-                    "track_count": p.get('track_count', 0),
-                    "annotation": p.get('annotation', {}),
-                    "track": [],
-                }
-            }
-            for p in playlists
-        ]
-        return jsonify({"success": True, "playlists": formatted, "count": len(formatted), "username": username, "source": source})
-    except Exception as e:
-        logger.error(f"Error getting Last.fm radio playlists: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"success": False, "error": str(e)}), 500
 
 
 # ========================================
 # LISTENBRAINZ PLAYLIST MANAGEMENT (Discovery System)
 # ========================================
 
-@app.route('/api/listenbrainz/series-detect', methods=['GET'])
-def get_listenbrainz_series_detect():
-    """Detect whether a LB playlist title belongs to a rotating series.
-
-    Auto-mirror uses this to decide whether the resulting mirror
-    row should point at a per-playlist MBID (one-off LB playlist)
-    or a synthetic series id (e.g. ``lb_weekly_jams_<user>``) that
-    rolls forward as ListenBrainz publishes new periods.
-
-    Query: ``?title=<raw LB playlist title>``
-    Response on a match:
-        ``{matched: true, series_id, canonical_name,
-           source: 'listenbrainz'|'lastfm'}``
-    Response on no match:
-        ``{matched: false}``
-    """
-    try:
-        from core.playlists.lb_series import detect_series
-
-        title = (request.args.get('title') or '').strip()
-        match = detect_series(title)
-        if match is None:
-            return jsonify({"matched": False})
-        return jsonify({
-            "matched": True,
-            "series_id": match.series_id,
-            "canonical_name": match.canonical_name,
-            "source": match.source_for_mirror,
-        })
-    except Exception as e:
-        logger.error(f"Error detecting LB series: {e}")
-        return jsonify({"matched": False, "error": str(e)}), 500
 
 
 def _lb_state_key(playlist_mbid, profile_id=None):
@@ -33555,9 +33353,6 @@ def _lb_state_key(playlist_mbid, profile_id=None):
 
 
 
-def convert_listenbrainz_results_to_spotify_tracks(discovery_results):
-    """Convert ListenBrainz discovery results to Spotify tracks format for sync"""
-    return convert_results_to_spotify_tracks(discovery_results, "ListenBrainz")
 
 @app.route('/api/wing-it/sync', methods=['POST'])
 def wing_it_sync():
@@ -37203,84 +36998,7 @@ def start_oauth_callback_servers():
             logger.error(f"Failed to start Spotify callback server: {e}")
     
     # Tidal callback server  
-    class TidalCallbackHandler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            logger.info("TIDAL CALLBACK SERVER RECEIVED REQUEST ")
-            parsed_url = urllib.parse.urlparse(self.path)
-            query_params = urllib.parse.parse_qs(parsed_url.query)
-            logger.info(f"Callback path: {self.path}")
-            
-            if 'code' in query_params:
-                auth_code = query_params['code'][0]
-                logger.info(f"Received Tidal authorization code: {auth_code[:10]}...")
-                
-                # Exchange the authorization code for tokens
-                try:
-                    from core.tidal_client import TidalClient
-                    
-                    # Create a temporary client and set the stored PKCE values
-                    temp_client = TidalClient()
-                    
-                    # Restore the PKCE values from the auth request
-                    global tidal_oauth_state
-                    with tidal_oauth_lock:
-                        temp_client.code_verifier = tidal_oauth_state["code_verifier"]
-                        temp_client.code_challenge = tidal_oauth_state["code_challenge"]
-                    
-                    logger.info(f"Restored PKCE - verifier: {temp_client.code_verifier[:20] if temp_client.code_verifier else 'None'}... challenge: {temp_client.code_challenge[:20] if temp_client.code_challenge else 'None'}...")
-                    
-                    success = temp_client.fetch_token_from_code(auth_code)
-                    
-                    if success:
-                        # Reinitialize the global tidal client with new tokens
-                        global tidal_client
-                        tidal_client = TidalClient()
-                        if tidal_enrichment_worker:
-                            tidal_enrichment_worker.client = tidal_client
-
-                        add_activity_item("", "Tidal Auth Complete", "Successfully authenticated with Tidal", "Now")
-                        self.send_response(200)
-                        self.send_header('Content-type', 'text/html')
-                        self.end_headers()
-                        self.wfile.write(b'<h1>Tidal Authentication Successful!</h1><p>You can close this window.</p>')
-                    else:
-                        raise Exception("Failed to exchange authorization code for tokens")
-                        
-                except Exception as e:
-                    logger.error(f"Tidal token processing error: {e}")
-                    add_activity_item("", "Tidal Auth Failed", f"Token processing failed: {str(e)}", "Now")
-                    self.send_response(400)
-                    self.send_header('Content-type', 'text/html')
-                    self.end_headers()
-                    self.wfile.write(f'<h1>Tidal Authentication Failed</h1><p>{str(e)}</p>'.encode())
-            else:
-                error = query_params.get('error', ['Unknown error'])[0]
-                logger.error(f"Tidal OAuth error: {error}")
-                add_activity_item("", "Tidal Auth Failed", f"OAuth error: {error}", "Now")
-                self.send_response(400)
-                self.send_header('Content-type', 'text/html')
-                self.end_headers()
-                self.wfile.write(f'<h1>Tidal Authentication Failed</h1><p>{error}</p>'.encode())
-        
-        def log_message(self, format, *args):
-            pass  # Suppress server logs
     
-    def run_tidal_server():
-        _env_val = os.environ.get('SOULSYNC_TIDAL_CALLBACK_PORT')
-        tidal_port = int(_env_val) if _env_val else 8889
-        if _env_val:
-            logger.info(f"[OAuth] SOULSYNC_TIDAL_CALLBACK_PORT={_env_val!r} — binding Tidal callback server on port {tidal_port}")
-        else:
-            logger.info(f"[OAuth] SOULSYNC_TIDAL_CALLBACK_PORT not set — using default port {tidal_port}")
-        try:
-            tidal_server = HTTPServer(('0.0.0.0', tidal_port), TidalCallbackHandler)
-            logger.info(f"Started Tidal OAuth callback server on port {tidal_port}")
-            logger.info(f"Tidal server listening on all interfaces, port {tidal_port}")
-            tidal_server.serve_forever()
-        except Exception as e:
-            logger.error(f"Failed to start Tidal callback server: {e}")
-            import traceback
-            logger.error(f"Full error: {traceback.format_exc()}")
     
     # Music Lite: only Spotify OAuth callback server remains active.
     spotify_thread = threading.Thread(target=run_spotify_server, daemon=True)
