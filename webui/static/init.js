@@ -1467,9 +1467,7 @@ function updateProfileIndicator() {
 // non-admins default to music unless explicitly granted (mirrors the server's
 // get_profile resolution, so a stale payload can't widen access).
 function profileAllowedSides() {
-    if (!currentProfile || currentProfile.is_admin || currentProfile.id === 1) return 'both';
-    const s = currentProfile.allowed_sides;
-    return (s === 'video' || s === 'both') ? s : 'music';
+    return 'music';
 }
 
 // =====================
@@ -2036,7 +2034,7 @@ function getProfilePageSelectOptions(profileSettings = {}) {
         });
     }
 
-    if (normalizedHomePage && !seen.has(normalizedHomePage)) {
+    if (normalizedHomePage && !String(normalizedHomePage).startsWith('video-') && !seen.has(normalizedHomePage)) {
         options.push({
             value: normalizedHomePage,
             label: getProfilePageLabel(normalizedHomePage),
@@ -2079,6 +2077,7 @@ function getProfilePageAccessOptions(profileSettings = {}) {
 
     if (allowedSet) {
         allowedSet.forEach(pageId => {
+            if (String(pageId).startsWith('video-')) return;
             if (seen.has(pageId)) return;
             options.push({
                 value: pageId,
@@ -2560,32 +2559,8 @@ function showProfileEditForm(profileId, currentName, currentColor, currentAvatar
     let canDlCheckbox = null;
     let selectedSides = null;
     if (isAdmin && !isEditingAdmin) {
-        // Side access — music | video | both, never nothing.
-        selectedSides = (profileSettings.allowed_sides === 'video' || profileSettings.allowed_sides === 'both')
-            ? profileSettings.allowed_sides : 'music';
-        const sidesLabel = document.createElement('label');
-        sidesLabel.className = 'profile-settings-label';
-        sidesLabel.textContent = 'Side Access';
-        form.appendChild(sidesLabel);
-
-        const sidesRow = document.createElement('div');
-        sidesRow.className = 'profile-sides-picker';
-        [['music', 'Music only'], ['video', 'Video only'], ['both', 'Music + Video']].forEach(([value, label]) => {
-            const lbl = document.createElement('label');
-            const r = document.createElement('input');
-            r.type = 'radio';
-            r.name = 'edit-profile-sides';
-            r.value = value;
-            r.checked = value === selectedSides;
-            r.addEventListener('change', () => {
-                selectedSides = value;
-                applySidesToPageCheckboxes(pageCheckboxes, selectedSides);
-            });
-            lbl.appendChild(r);
-            lbl.appendChild(document.createTextNode(' ' + label));
-            sidesRow.appendChild(lbl);
-        });
-        form.appendChild(sidesRow);
+        // Music Lite: side selection is fixed and intentionally not exposed.
+        selectedSides = 'music';
 
         const apLabel = document.createElement('label');
         apLabel.className = 'profile-settings-label';
@@ -2956,7 +2931,7 @@ const _DEEPLINK_VALID_PAGES = new Set([
     'dashboard', 'sync', 'search', 'discover', 'automations',
     'library', 'import', 'settings', 'help', 'issues', 'stats', 'watchlist',
     'wishlist', 'active-downloads', 'artist-detail', 'playlist-explorer',
-    'hydrabase', 'tools', 'chat'
+    'hydrabase', 'tools'
 ]);
 
 function _getPageFromPath() {
@@ -3429,9 +3404,6 @@ async function loadPageData(pageId) {
             // host and never calls loadPageData for it.
             case 'automations':
                 await loadAutomations();
-                break;
-            case 'chat':
-                if (window.ChatPage) window.ChatPage.open();
                 break;
             case 'help':
                 initializeDocsPage();

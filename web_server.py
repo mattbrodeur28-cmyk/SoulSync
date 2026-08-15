@@ -41314,150 +41314,6 @@ def _emit_watchlist_count_loop():
         except Exception as e:
             logger.debug(f"Error emitting watchlist count: {e}")
 
-# Soulseek chat push (P3): watch the community room + PM unread state through
-# slskd and push deltas over the socket, so the nav badge and the bell react
-# without the chat page being open. First pass after boot only BASELINES the
-# room (no replaying history as "new"). Wholly idle-gated: zero slskd calls
-# while no browser is connected.
-_chat_push_state = {'room_key': None, 'pm_unread': -1, 'room': None}
-
-def _emit_chat_push_loop():
-    while not globals().get('IS_SHUTTING_DOWN', False):
-        socketio.sleep(6)
-        try:
-            if not _has_connected_clients():
-                continue
-            _slsk = download_orchestrator.client("soulseek") if download_orchestrator else None
-            if not _slsk or not _slsk.base_url:
-                continue
-            room = str(config_manager.get('soulseek.chat_room', 'SoulSync') or 'SoulSync')
-            if room != _chat_push_state['room']:
-                # room renamed (settings cog): re-baseline so the new room's
-                # history never replays as 'new' badge/notification spam
-                _chat_push_state['room'] = room
-                _chat_push_state['room_key'] = None
-            joined = run_async(_slsk.get_joined_rooms()) or []
-            if room not in joined:
-                # auto-join at startup / after an slskd restart (joins don't
-                # persist). chat_auto_join=false is the opt-out for users who
-                # don't want their account sitting in a public room — without
-                # it the loop would re-join them every 6s (un-leaveable). The
-                # chat PAGE still joins on open (an explicit user action).
-                if not config_manager.get('soulseek.chat_auto_join', True):
-                    room = None
-                elif not run_async(_slsk.join_room(room)):
-                    room = None
-            if not room:
-                msgs = []
-            else:
-                msgs = run_async(_slsk.get_room_messages(room)) or []
-            msgs.sort(key=lambda m: str(m.get('timestamp') or ''))
-            key = (str(msgs[-1].get('timestamp') or '') + ':' + str(len(msgs))) if msgs else ''
-            prev_key = _chat_push_state['room_key']
-            if prev_key is None:
-                _chat_push_state['room_key'] = key      # baseline, never replay history
-            elif key != prev_key:
-                prev_stamp = prev_key.rsplit(':', 1)[0]
-                fresh = [m for m in msgs if str(m.get('timestamp') or '') > prev_stamp]
-                _chat_push_state['room_key'] = key
-                if fresh:
-                    # live pushes carry the same DECODED view the API serves
-                    from core import chat_codec
-                    proto_events = []
-                    def _unwrap(m, _sink=proto_events):   # bound at def (B023)
-                        dec = chat_codec.decode(m.get('message'))
-                        if dec is not None and chat_codec.reaction_of(dec):
-                            return None      # reaction carriers never render/badge
-                        if dec is not None:
-                            _p = chat_codec.protocol_of(dec)
-                            if _p:
-                                # machine coordination: never archived, pushed
-                                # on its own channel for real-time handling.
-                                # Only PURE carriers (empty text) vanish —
-                                # piggybacked text still renders/archives.
-                                _sink.append({
-                                    'username': m.get('username'),
-                                    'timestamp': m.get('timestamp'), 'p': _p})
-                                if not dec.get('t'):
-                                    return None
-                        out = {'username': m.get('username'),
-                               'message': dec['t'] if dec else m.get('message'),
-                               'timestamp': m.get('timestamp')}
-                        if dec:
-                            out['rich'] = True
-                            rep = chat_codec.reply_of(dec)
-                            if rep:
-                                out['reply'] = rep
-                            _f = chat_codec.file_of(dec)
-                            if _f:
-                                out['file'] = _f
-                            # Channel / thread / avatar envelope tags — the
-                            # SAME set api/chat's unwrap attaches. Dropping
-                            # them here was the channels bug: every LIVE
-                            # message arrived untagged, filed into #general,
-                            # and was archived stripped, so the tag was gone
-                            # for good on reload too.
-                            _c = dec.get('c')
-                            if isinstance(_c, str) and _c.strip():
-                                out['chan'] = _c.strip()[:24]
-                            _th2 = dec.get('th')
-                            if isinstance(_th2, str) and _th2.strip():
-                                out['th'] = _th2.strip()[:160]
-                                _tn2 = dec.get('tn')
-                                if isinstance(_tn2, str) and _tn2.strip():
-                                    out['tn'] = _tn2.strip()[:80]
-                            try:
-                                _av2 = int(dec.get('av'))
-                                if 1 <= _av2 <= 100:
-                                    out['av'] = _av2
-                            except (TypeError, ValueError):
-                                pass
-                            _ed2 = chat_codec.edit_of(dec)
-                            if _ed2:
-                                out['ed'] = _ed2
-                        return out
-                    decoded = [x for x in (_unwrap(m) for m in fresh) if x]
-                    if proto_events:
-                        # Arcade gm.* carriers are durable game state and DO
-                        # get archived (add_chat_game_carriers filters to gm.*
-                        # and is idempotent). Until now only the chat page's
-                        # hydrate endpoint archived them — with nobody on the
-                        # chat page, moves arriving from other room members
-                        # were never written down and an slskd restart lost
-                        # them. The rest of the bus stays live-only.
-                        try:
-                            get_database().add_chat_game_carriers(room, proto_events)
-                        except Exception:
-                            logger.debug("chat: loop game-carrier archive failed", exc_info=True)
-                        socketio.emit('chat:room_protocol', {
-                            'room': room, 'events': proto_events[-40:]})
-                    if decoded:      # a reaction-only tick still tracks PMs below
-                        try:
-                            get_database().add_chat_messages(room, decoded)
-                        except Exception:
-                            logger.debug("chat: loop archive write failed", exc_info=True)
-                        socketio.emit('chat:room_message', {
-                            'room': room,
-                            'messages': decoded[-20:],
-                        })
-            convos = run_async(_slsk.get_conversations()) or []
-            unread_users = [str(c.get('username') or '') for c in convos
-                            if c.get('hasUnAcknowledgedMessages')
-                            or (c.get('unAcknowledgedMessageCount') or 0) > 0]
-            unread = len([u for u in unread_users if u])
-            prev = _chat_push_state['pm_unread']
-            if unread != prev:
-                _chat_push_state['pm_unread'] = unread
-                socketio.emit('chat:unread', {
-                    'pms': unread,
-                    'users': [u for u in unread_users if u][:3],
-                    # 'grew' gates the toast: only a RISING count notifies (a read
-                    # clearing the flag must not), and never the boot baseline
-                    'grew': prev >= 0 and unread > prev,
-                })
-        except Exception:
-            logger.debug("chat push loop error", exc_info=True)
-
 # Anti-leech challenge auto-responder ("please type 'human' in this chat"):
 # NOT idle-gated — the whole point is answering at 3am with no browser open,
 # so blocked overnight grabs unblock themselves. One cheap conversations poll
@@ -41891,26 +41747,6 @@ _configure_enrichment_api(
 
 app.register_blueprint(_create_enrichment_blueprint())
 
-# Soulseek chat (rooms + PMs through slskd) — side-neutral, absolute /api/chat
-# paths, mounted OUTSIDE the video blueprint so music-only profiles reach it.
-from api.chat import configure as _configure_chat_api, create_blueprint as _create_chat_blueprint
-def _chat_youtube_search(query, max_results):
-    """Jukebox search seam: the shared yt-dlp client, or None → paste-only."""
-    yt = download_orchestrator.client("youtube")
-    if yt is None:
-        return []
-    return run_async(yt.search_videos(query, max_results=max_results))
-
-
-_configure_chat_api(
-    client_getter=lambda: download_orchestrator.client("soulseek"),
-    run_async=run_async,
-    config_get=lambda key, default=None: config_manager.get(key, default),
-    config_set=lambda key, value: config_manager.set(key, value),
-    db_getter=get_database,
-    youtube_search=_chat_youtube_search,
-)
-app.register_blueprint(_create_chat_blueprint())
 
 # Record-label watchlist (search labels / browse a label's catalog / follow) —
 # purely additive, self-contained blueprint reading only watchlist_labels + the
@@ -42705,7 +42541,6 @@ def start_runtime_services():
         socketio.start_background_task(_emit_service_status_loop)
         socketio.start_background_task(_emit_watchlist_count_loop)
         socketio.start_background_task(_emit_download_status_loop)
-        socketio.start_background_task(_emit_chat_push_loop)
         socketio.start_background_task(_chat_auto_prove_loop)
         # Server Activity — subscriber-gated live push (idle when no drawer open)
         socketio.start_background_task(_emit_server_activity_loop)
