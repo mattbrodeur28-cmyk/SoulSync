@@ -54,7 +54,7 @@ def register_routes(bp):
                     tracks = [_serialize_track(t) for t in results]
                     return api_success({"tracks": tracks, "source": "spotify"})
 
-            if source in ("itunes", "deezer", "auto"):
+            if source in ("itunes", "auto"):
                 fallback = get_primary_client()
                 fallback_source = get_primary_source()
                 results = fallback.search_tracks(query, limit=limit)

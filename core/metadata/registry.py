@@ -18,12 +18,10 @@ logger = get_logger("metadata.registry")
 
 MetadataClientFactory = Callable[[], Any]
 
-METADATA_SOURCE_PRIORITY = ("deezer", "itunes", "spotify", "discogs", "hydrabase", "musicbrainz", "jiosaavn", "bandcamp")
+METADATA_SOURCE_PRIORITY = ('itunes', 'spotify', 'hydrabase', 'musicbrainz', 'jiosaavn', 'bandcamp')
 METADATA_SOURCE_LABELS = {
     "spotify": "Spotify",
     "itunes": "iTunes",
-    "deezer": "Deezer",
-    "discogs": "Discogs",
     "hydrabase": "Hydrabase",
     "musicbrainz": "MusicBrainz",
     "jiosaavn": "JioSaavn",

@@ -1,5 +1,5 @@
 """
-Playlist endpoints — list and inspect playlists from Spotify/Tidal.
+Playlist endpoints — Spotify-only Music Lite API.
 """
 
 from flask import request, current_app
@@ -12,9 +12,9 @@ def register_routes(bp):
     @bp.route("/playlists", methods=["GET"])
     @require_api_key
     def list_playlists():
-        """List user playlists from Spotify or Tidal.
+        """List user playlists from Spotify.
 
-        Query: ?source=spotify|tidal  (default: spotify)
+        Query: ?source=spotify  (default: spotify)
         """
         source = request.args.get("source", "spotify")
         ctx = current_app.soulsync
@@ -40,26 +40,7 @@ def register_routes(bp):
                     "source": "spotify",
                 })
 
-            elif source == "tidal":
-                tidal = ctx.get("tidal_client")
-                if not tidal:
-                    return api_error("NOT_AVAILABLE", "Tidal client not configured.", 503)
-
-                playlists = tidal.get_user_playlists_metadata_only()
-                return api_success({
-                    "playlists": [
-                        {
-                            "id": p.get("id") or p.get("uuid"),
-                            "name": p.get("title") or p.get("name"),
-                            "track_count": p.get("numberOfTracks", 0),
-                            "image_url": p.get("image"),
-                        }
-                        for p in (playlists or [])
-                    ],
-                    "source": "tidal",
-                })
-
-            return api_error("BAD_REQUEST", "source must be 'spotify' or 'tidal'.", 400)
+            return api_error("BAD_REQUEST", "source must be 'spotify'.", 400)
         except Exception as e:
             return api_error("PLAYLIST_ERROR", str(e), 500)
 

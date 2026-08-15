@@ -39,15 +39,12 @@ from core.download_plugins.base import DownloadSourcePlugin
 # registry-load time pins the bindings the same way the legacy
 # orchestrator did.
 from core.amazon_download_client import AmazonDownloadClient
-from core.deezer_download_client import DeezerDownloadClient
 from core.download_plugins.torrent import TorrentDownloadPlugin
 from core.download_plugins.usenet import UsenetDownloadPlugin
 from core.hifi_client import HiFiClient
 from core.lidarr_download_client import LidarrDownloadClient
-from core.qobuz_client import QobuzClient
 from core.soulseek_client import SoulseekClient
 from core.soundcloud_client import SoundcloudClient
-from core.tidal_download_client import TidalDownloadClient
 from core.youtube_client import YouTubeClient
 
 logger = get_logger("download_plugins.registry")
@@ -182,14 +179,10 @@ def build_default_registry() -> DownloadPluginRegistry:
     registry.register(PluginSpec(name='amazon',    factory=AmazonDownloadClient,   display_name='Amazon Music'))
     registry.register(PluginSpec(name='soulseek',  factory=SoulseekClient,         display_name='Soulseek'))
     registry.register(PluginSpec(name='youtube',   factory=YouTubeClient,          display_name='YouTube'))
-    registry.register(PluginSpec(name='tidal',     factory=TidalDownloadClient,    display_name='Tidal'))
-    registry.register(PluginSpec(name='qobuz',     factory=QobuzClient,            display_name='Qobuz'))
     registry.register(PluginSpec(name='hifi',      factory=HiFiClient,             display_name='HiFi'))
     # 'deezer_dl' is the legacy name used in config + per-source dispatch
     # strings (e.g. orchestrator's ``source_map``). Canonical name is
     # ``deezer`` so future-facing code reads naturally.
-    registry.register(PluginSpec(name='deezer',    factory=DeezerDownloadClient,   display_name='Deezer',
-                                 aliases=('deezer_dl',)))
     registry.register(PluginSpec(name='lidarr',    factory=LidarrDownloadClient,   display_name='Lidarr'))
     registry.register(PluginSpec(name='soundcloud',factory=SoundcloudClient,       display_name='SoundCloud'))
     registry.register(PluginSpec(name='torrent',   factory=TorrentDownloadPlugin,  display_name='Torrent (Prowlarr)'))

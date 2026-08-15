@@ -235,16 +235,12 @@ import yt_dlp
 from beatport_unified_scraper import BeatportUnifiedScraper
 from core.musicbrainz_worker import MusicBrainzWorker
 from core.audiodb_worker import AudioDBWorker
-from core.discogs_worker import DiscogsWorker
-from core.deezer_worker import DeezerWorker
 from core.jiosaavn_worker import JioSaavnWorker
 from core.spotify_worker import SpotifyWorker
 from core.itunes_worker import iTunesWorker
 from core.lastfm_worker import LastFMWorker
 from core.genius_worker import GeniusWorker
 from core.bandcamp_worker import BandcampWorker
-from core.tidal_worker import TidalWorker
-from core.qobuz_worker import QobuzWorker
 from core.hydrabase_worker import HydrabaseWorker
 from core.amazon_worker import AmazonWorker
 from core.hydrabase_client import HydrabaseClient
@@ -287,6 +283,59 @@ if os.path.exists(config_path):
         logger.info("Web server configuration loaded successfully.")
 else:
     logger.warning(f"config.json not found at {config_path}. Using default settings.")
+
+# Music Lite provider policy — removed integrations never enter runtime.
+# Old encrypted credentials may remain in the database for rollback safety,
+# but they are removed from the in-memory configuration before clients start.
+_MUSIC_LITE_REMOVED_PROVIDERS = {
+    "deezer", "discogs", "tidal", "qobuz", "listenbrainz"
+}
+
+
+def _music_lite_apply_removed_provider_policy():
+    cfg = getattr(config_manager, "config_data", None)
+    if not isinstance(cfg, dict):
+        return
+
+    for key in (
+        "deezer", "deezer_download",
+        "discogs",
+        "tidal", "tidal_download", "tidal_tokens",
+        "qobuz",
+        "listenbrainz",
+    ):
+        cfg.pop(key, None)
+
+    metadata = cfg.setdefault("metadata", {})
+    if str(metadata.get("fallback_source") or "").lower() in _MUSIC_LITE_REMOVED_PROVIDERS:
+        metadata["fallback_source"] = "itunes"
+
+    download = cfg.setdefault("download_source", {})
+    removed_download = {"deezer", "deezer_dl", "tidal", "qobuz"}
+    if str(download.get("mode") or "").lower() in removed_download:
+        download["mode"] = "soulseek"
+
+    if str(download.get("hybrid_primary") or "").lower() in removed_download:
+        download["hybrid_primary"] = "soulseek"
+    if str(download.get("hybrid_secondary") or "").lower() in removed_download:
+        download["hybrid_secondary"] = "youtube"
+
+    if isinstance(download.get("hybrid_order"), list):
+        download["hybrid_order"] = [
+            x for x in download["hybrid_order"]
+            if str(x).lower() not in removed_download
+        ]
+
+    enhancement = cfg.get("metadata_enhancement")
+    if isinstance(enhancement, dict) and isinstance(enhancement.get("post_process_order"), list):
+        enhancement["post_process_order"] = [
+            x for x in enhancement["post_process_order"]
+            if str(x).lower() not in _MUSIC_LITE_REMOVED_PROVIDERS
+        ]
+
+
+_music_lite_apply_removed_provider_policy()
+
 # Correctly point to the 'webui' directory for templates and static files
 app = Flask(
     __name__,
@@ -978,7 +1027,8 @@ IS_SHUTTING_DOWN = False
 # Each client is initialized independently so one failure doesn't take down everything.
 # Previously, a single exception set ALL clients to None, breaking the entire app.
 logger.info("Initializing SoulSync services for Web UI...")
-spotify_client = download_orchestrator = tidal_client = matching_engine = sync_service = web_scan_manager = media_server_engine = None
+spotify_client = download_orchestrator = matching_engine = sync_service = web_scan_manager = media_server_engine = None
+tidal_client = None  # Music Lite: removed provider
 
 try:
     spotify_client = get_spotify_client()
@@ -1054,11 +1104,6 @@ try:
 except Exception as e:
     logger.error(f"  Download orchestrator failed to initialize: {e}")
 
-try:
-    tidal_client = TidalClient()
-    logger.info("  Tidal client initialized")
-except Exception as e:
-    logger.error(f"  Tidal client failed to initialize: {e}")
 
 try:
     matching_engine = MusicMatchingEngine()
@@ -1398,12 +1443,8 @@ def _register_automation_handlers():
         # admin's existing auto-sync pipelines are unchanged. (Deezer/Qobuz stay
         # global for now — their playlist login is tangled with downloads.)
         spotify_client_getter=get_spotify_client_for_profile,
-        tidal_client_getter=get_tidal_client_for_profile,
-        qobuz_client_getter=_get_qobuz_client_for_sync,
-        deezer_client_getter=_get_deezer_client,
         youtube_parser=parse_youtube_playlist,
         itunes_link_parser=_itunes_link_parser_for_registry,
-        listenbrainz_manager_getter=_lb_manager_for_registry,
         lastfm_manager_getter=_lb_manager_for_registry,
         personalized_manager_getter=_build_personalized_manager,
         profile_id_getter=get_current_profile_id,
@@ -2041,16 +2082,12 @@ def _shutdown_runtime_components():
     _stop_components_parallel([
         (mb_worker, "musicbrainz worker"),
         (audiodb_worker, "audiodb worker"),
-        (discogs_worker, "discogs worker"),
-        (deezer_worker, "deezer worker"),
         (jiosaavn_worker, "jiosaavn worker"),
         (bandcamp_worker, "bandcamp worker"),
         (spotify_enrichment_worker, "spotify enrichment worker"),
         (itunes_enrichment_worker, "itunes enrichment worker"),
         (lastfm_worker, "lastfm worker"),
         (genius_worker, "genius worker"),
-        (tidal_enrichment_worker, "tidal enrichment worker"),
-        (qobuz_enrichment_worker, "qobuz enrichment worker"),
         (hydrabase_worker, "hydrabase worker"),
         (soulid_worker, "soulid worker"),
         (listening_stats_worker, "listening stats worker"),
@@ -2066,13 +2103,9 @@ def _shutdown_runtime_components():
         (missing_download_executor, "missing download executor"),
         (album_bundle_executor, "album bundle executor"),
         (import_singles_executor, "import singles executor"),
-        (tidal_discovery_executor, "tidal discovery executor"),
-        (deezer_discovery_executor, "deezer discovery executor"),
-        (qobuz_discovery_executor, "qobuz discovery executor"),
         (spotify_public_discovery_executor, "spotify public discovery executor"),
         (youtube_discovery_executor, "youtube discovery executor"),
         (beatport_discovery_executor, "beatport discovery executor"),
-        (listenbrainz_discovery_executor, "listenbrainz discovery executor"),
         (similar_artists_executor, "similar artists executor"),
         (metadata_update_executor, "metadata update executor"),
     ]:
@@ -3561,7 +3594,7 @@ def handle_settings():
                     for key, value in _experimental_in.items():
                         config_manager.set(f'experimental.{key}', value)
 
-                for service in ['spotify', 'plex', 'jellyfin', 'navidrome', 'soulseek', 'download_source', 'settings', 'database', 'metadata_enhancement', 'file_organization', 'playlist_sync', 'tidal', 'tidal_download', 'qobuz', 'hifi_download', 'deezer_download', 'amazon_download', 'lidarr_download', 'prowlarr', 'torrent_client', 'usenet_client', 'listenbrainz', 'acoustid', 'lastfm', 'genius', 'import', 'lossy_copy', 'album_downloads', 'listening_stats', 'ui_appearance', 'youtube', 'content_filter', 'itunes', 'm3u_export', 'musicbrainz', 'deezer', 'audiodb', 'metadata', 'hydrabase', 'security', 'discogs', 'library', 'discover', 'wishlist', 'genre_whitelist', 'post_processing', 'playlists', 'experimental']:
+                for service in ['spotify', 'plex', 'jellyfin', 'navidrome', 'soulseek', 'download_source', 'settings', 'database', 'metadata_enhancement', 'file_organization', 'playlist_sync', 'hifi_download', 'amazon_download', 'lidarr_download', 'prowlarr', 'torrent_client', 'usenet_client', 'acoustid', 'lastfm', 'genius', 'import', 'lossy_copy', 'album_downloads', 'listening_stats', 'ui_appearance', 'youtube', 'content_filter', 'itunes', 'm3u_export', 'musicbrainz', 'audiodb', 'metadata', 'hydrabase', 'security', 'library', 'discover', 'wishlist', 'genre_whitelist', 'post_processing', 'playlists', 'experimental']:
                     if service in new_settings:
                         if service == 'experimental' and isinstance(_experimental_in, dict):
                             continue
@@ -3606,11 +3639,8 @@ def handle_settings():
                 _yt = download_orchestrator.client("youtube")
                 if _yt:
                     _yt.reload_settings()
-            # FIX: Re-instantiate the global tidal_client to pick up new settings
-            try:
-                tidal_client = TidalClient()
-            except Exception as e:
-                logger.debug("tidal client re-init: %s", e)
+            # Music Lite: Tidal provider removed; keep runtime slot inert.
+            tidal_client = None
             # Reload enrichment worker clients for key-based services
             if lastfm_worker:
                 lastfm_worker._init_client()
@@ -5526,179 +5556,6 @@ def auth_spotify_export():
         return f"<h1>Spotify Export Authorization Error</h1><p>{str(e)}</p>", 500
 
 
-@app.route('/auth/tidal')
-def auth_tidal():
-    """
-    Initiates Tidal OAuth authentication flow
-    """
-    logger.info("TIDAL AUTH ROUTE CALLED ")
-    try:
-        # Create a fresh tidal client to get OAuth URL
-        from core.tidal_client import TidalClient
-        temp_tidal_client = TidalClient()
-        
-        if not temp_tidal_client.client_id:
-            return "<h1>Tidal Authentication Failed</h1><p>Tidal client ID not configured. Check your credentials.</p>", 400
-        
-        # Generate PKCE challenge and store globally
-        temp_tidal_client._generate_pkce_challenge()
-        
-        # Store PKCE values globally for callback use
-        global tidal_oauth_state
-        with tidal_oauth_lock:
-            tidal_oauth_state["code_verifier"] = temp_tidal_client.code_verifier
-            tidal_oauth_state["code_challenge"] = temp_tidal_client.code_challenge
-        
-        # Use the user's configured redirect_uri from settings, falling back
-        # to the constructor default (``http://127.0.0.1:<port>/tidal/callback``).
-        # The settings UI displays the default as the placeholder, and SoulSync's
-        # docs tell users to register THAT URI with their Tidal Developer App
-        # — Tidal validates the redirect_uri sent in the authorize request
-        # against the one in the portal, so sending anything else (e.g. a
-        # network-IP variant built from request.host) returns Tidal error 1002
-        # "Invalid redirect URI" and the user can't authenticate.
-        #
-        # Docker/remote-access workflow is preserved by the post-auth swap step
-        # in the instructions page below: SoulSync sends ``127.0.0.1:<port>``,
-        # Tidal redirects the user's browser to that URI (which fails locally),
-        # the instructions tell the user to swap ``127.0.0.1`` for the host
-        # they're accessing SoulSync from, and the swapped URL hits the
-        # container's exposed callback port. Building the URI from request.host
-        # at authorize time used to skip the swap entirely but broke users
-        # who registered the documented default.
-        configured_redirect = config_manager.get('tidal.redirect_uri', '')
-        if configured_redirect:
-            temp_tidal_client.redirect_uri = configured_redirect
-            logger.info(f"Using configured Tidal redirect_uri: {configured_redirect}")
-        else:
-            logger.info(
-                f"Using default Tidal redirect_uri (no config override): "
-                f"{temp_tidal_client.redirect_uri}"
-            )
-
-        # Store PKCE + redirect_uri for callback to use the same values
-        with tidal_oauth_lock:
-            tidal_oauth_state["redirect_uri"] = temp_tidal_client.redirect_uri
-
-        logger.info(f"Stored PKCE - verifier: {temp_tidal_client.code_verifier[:20]}... challenge: {temp_tidal_client.code_challenge[:20]}...")
-
-        # Store profile_id for per-profile auth
-        profile_id = request.args.get('profile_id', '')
-        with tidal_oauth_lock:
-            tidal_oauth_state["profile_id"] = profile_id if profile_id and profile_id != '1' else None
-
-        # Create OAuth URL.
-        # `collection.read` is required for the `userCollectionTracks`
-        # endpoint that powers the virtual "Favorite Tracks" playlist
-        # (issue #502). `prompt=consent` forces Tidal to display the
-        # consent screen even when the app is already authorized — without
-        # it, re-authenticating after a scope expansion can silently
-        # return a token carrying only the ORIGINAL scope set because
-        # Tidal treats the existing authorization as still valid.
-        import urllib.parse
-        params = {
-            'response_type': 'code',
-            'client_id': temp_tidal_client.client_id,
-            'redirect_uri': temp_tidal_client.redirect_uri,
-            'scope': 'user.read playlists.read collection.read',
-            'code_challenge': temp_tidal_client.code_challenge,
-            'code_challenge_method': 'S256',
-            'prompt': 'consent',
-        }
-        
-        auth_url = f"{temp_tidal_client.auth_url}?" + urllib.parse.urlencode(params)
-        
-        logger.info(f"Generated Tidal OAuth URL: {auth_url}")
-        logger.info(f"Redirect URI in URL: {params['redirect_uri']}")
-        
-        add_activity_item("", "Tidal Auth Started", "Please complete OAuth in browser", "Now")
-
-        # Detect if accessing remotely (copied from Spotify auth logic)
-        host = request.host.split(':')[0]
-        is_remote = host not in ['127.0.0.1', 'localhost']
-        is_docker = os.path.exists('/.dockerenv')
-        
-        # If in Docker and accessing via 127.0.0.1, recommend localhost
-        if is_docker and host == '127.0.0.1':
-            host = 'localhost'
-
-        if is_remote or is_docker:
-            # Show instructions for remote/docker access
-            page_title = "Tidal Authentication (Remote/Docker)"
-            step_1_text = "Click the link below to authenticate with Tidal"
-
-            # Pull the actual Tidal callback port from the same place the
-            # OAuth URL was built. Using a hardcoded 8888 here used to
-            # mislead users into saving Spotify's port into their Tidal
-            # redirect URI, which then gave Tidal error 1002 (invalid
-            # redirect URI) on every auth attempt.
-            try:
-                from urllib.parse import urlparse as _urlparse
-                _parsed = _urlparse(temp_tidal_client.redirect_uri)
-                tidal_port = _parsed.port or int(
-                    os.environ.get('SOULSYNC_TIDAL_CALLBACK_PORT', 8889)
-                )
-            except Exception:
-                tidal_port = int(os.environ.get('SOULSYNC_TIDAL_CALLBACK_PORT', 8889))
-
-            return f'''
-            <html>
-            <head>
-                <style>
-                    body {{ font-family: Arial, sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; }}
-                    code {{ background: #f0f0f0; padding: 10px; display: block; margin: 10px 0; }}
-                    .highlight {{ background: #e8f5e9; }}
-                    .copy-btn {{
-                        background: #000000; /* Tidal Black */
-                        color: white;
-                        border: none;
-                        padding: 8px 16px;
-                        cursor: pointer;
-                        border-radius: 4px;
-                        font-size: 14px;
-                        margin-left: 10px;
-                    }}
-                    .copy-btn:hover {{ background: #333333; }}
-                    .copied {{ background: #4CAF50 !important; }}
-                </style>
-            </head>
-            <body>
-                <h1>{page_title}</h1>
-                <p><strong>Step 1:</strong> {step_1_text}</p>
-                <p><a href="{auth_url}" target="_blank" style="font-size: 18px; color: #000000;">{auth_url}</a></p>
-                <hr>
-                <p><strong>Step 2:</strong> After authorizing, you'll see a blank page or an error. The URL will look like:</p>
-                <code>http://127.0.0.1:{tidal_port}/tidal/callback?code=...</code>
-                <p><strong>Step 3:</strong> Change <code style="display: inline; background: #ffe6e6; padding: 2px 6px;">127.0.0.1</code> to <code style="display: inline; background: #e8f5e9; padding: 2px 6px;">{host}</code> and press Enter:
-                    <button class="copy-btn" onclick="copyIP()">Copy IP</button>
-                </p>
-                <code class="highlight">http://{host}:{tidal_port}/tidal/callback?code=...</code>
-                <p>Authentication will then complete!</p>
-
-                <script>
-                    function copyIP() {{
-                        navigator.clipboard.writeText('{host}').then(() => {{
-                            const btn = event.target;
-                            btn.textContent = 'Copied!';
-                            btn.classList.add('copied');
-                            setTimeout(() => {{
-                                btn.textContent = 'Copy IP';
-                                btn.classList.remove('copied');
-                            }}, 2000);
-                        }});
-                    }}
-                </script>
-            </body>
-            </html>
-            '''
-        else:
-            return f'<h1>Tidal Authentication</h1><p>Please visit this URL to authenticate:</p><p><a href="{auth_url}" target="_blank">{auth_url}</a></p><p>After authentication, return to the app.</p>'
-        
-    except Exception as e:
-        logger.error(f"Error starting Tidal auth: {e}")
-        import traceback
-        logger.error(f"Full traceback: {traceback.format_exc()}")
-        return f"<h1>Tidal Authentication Error</h1><p>{str(e)}</p>", 500
 
 
 def _spotify_auth_result_page(detail_text: str, authenticated: bool = True) -> str:
@@ -5870,7 +5727,7 @@ def spotify_disconnect():
     """Disconnect Spotify and keep using the active primary metadata source."""
     global spotify_client
     try:
-        configured_source = config_manager.get('metadata.fallback_source', 'deezer') or 'deezer'
+        configured_source = config_manager.get('metadata.fallback_source', 'itunes') or 'itunes'
         # Pause enrichment worker before disconnecting to prevent it from hammering API
         if spotify_enrichment_worker:
             spotify_enrichment_worker.pause()
@@ -5918,149 +5775,12 @@ def spotify_rate_limit_status():
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/tidal/callback')
-def tidal_callback():
-    """
-    Handles the callback from Tidal after the user authorizes the application.
-    It receives an authorization code, exchanges it for an access token,
-    and saves the token.
-    """
-    global tidal_client # We will re-initialize the global client
-    auth_code = request.args.get('code')
-    
-    if not auth_code:
-        error = request.args.get('error', 'Unknown error')
-        error_description = request.args.get('error_description', 'No description provided.')
-        return f"<h1>Tidal Authentication Failed</h1><p>Error: {error}</p><p>{error_description}</p><p>Please close this window and try again.</p>", 400
-
-    try:
-        # Create a temporary client for the token exchange
-        temp_tidal_client = TidalClient()
-
-        # Restore PKCE values, redirect_uri, and profile_id from the auth request
-        profile_id_for_tidal = None
-        with tidal_oauth_lock:
-            temp_tidal_client.code_verifier = tidal_oauth_state["code_verifier"]
-            temp_tidal_client.code_challenge = tidal_oauth_state["code_challenge"]
-            if "redirect_uri" in tidal_oauth_state:
-                temp_tidal_client.redirect_uri = tidal_oauth_state["redirect_uri"]
-            profile_id_for_tidal = tidal_oauth_state.get("profile_id")
-
-        success = temp_tidal_client.fetch_token_from_code(auth_code)
-
-        if success:
-            # Per-profile: store tokens on profile, don't touch global client
-            if profile_id_for_tidal:
-                try:
-                    profile_id_int = int(profile_id_for_tidal)
-                    get_database().set_profile_tidal_tokens(
-                        profile_id_int, temp_tidal_client.access_token, temp_tidal_client.refresh_token)
-                    clear_profile_tidal_client(profile_id_int)  # rebuild with fresh tokens
-                    add_activity_item("", "Tidal Auth Complete", f"Profile {profile_id_int} authenticated with Tidal", "Now")
-                    return "<h1>Tidal Authentication Successful!</h1><p>Your personal Tidal account is now connected. You can close this window.</p>"
-                except Exception as profile_err:
-                    logger.error(f"Per-profile Tidal auth failed, falling back to global: {profile_err}")
-
-            # Global: Re-initialize the main global tidal_client instance with the new token
-            tidal_client = TidalClient()
-            if tidal_enrichment_worker:
-                tidal_enrichment_worker.client = tidal_client
-            return "<h1>Tidal Authentication Successful!</h1><p>You can now close this window and return to the SoulSync application.</p>"
-        else:
-            return "<h1>Tidal Authentication Failed</h1><p>Could not exchange authorization code for a token. Please try again.</p>", 400
-    except Exception as e:
-        logger.error(f"Error during Tidal token exchange: {e}")
-        return f"<h1>An Error Occurred</h1><p>An unexpected error occurred during the authentication process: {e}</p>", 500
 
 
 # --- Deezer OAuth ---
 
-@app.route('/auth/deezer')
-def auth_deezer():
-    """Initialize Deezer OAuth flow. Redirects user to Deezer authorization page."""
-    try:
-        app_id = config_manager.get('deezer.app_id', '')
-        redirect_uri = config_manager.get('deezer.redirect_uri', 'http://127.0.0.1:8008/deezer/callback')
-
-        if not app_id:
-            return "<h1>Deezer App ID not configured</h1><p>Go to Settings → Connections and enter your Deezer App ID first.</p>", 400
-
-        perms = 'basic_access,email,offline_access,manage_library,listening_history'
-        import urllib.parse
-        auth_url = f"https://connect.deezer.com/oauth/auth.php?app_id={app_id}&redirect_uri={urllib.parse.quote(redirect_uri)}&perms={perms}"
-
-        host = request.host.split(':')[0]
-        return f"""
-        <html><body style="font-family:system-ui;max-width:600px;margin:40px auto;padding:20px;background:#111;color:#eee">
-            <h1>Deezer Authorization</h1>
-            <p>Click the link below to authorize SoulSync with your Deezer account:</p>
-            <p><a href="{auth_url}" style="color:#A238FF;font-size:18px">Authorize on Deezer →</a></p>
-            <hr style="border-color:#333">
-            <p style="color:#888;font-size:13px">If running remotely, replace <code>127.0.0.1</code> in the redirect URI with <code>{host}</code></p>
-        </body></html>
-        """
-    except Exception as e:
-        return f"<h1>Error</h1><p>{e}</p>", 500
 
 
-@app.route('/deezer/callback')
-def deezer_callback():
-    """Handle Deezer OAuth callback — exchange code for access token."""
-    auth_code = request.args.get('code')
-    error_reason = request.args.get('error_reason', '')
-
-    if not auth_code:
-        return f"<h1>Deezer Authentication Failed</h1><p>{error_reason or 'No authorization code received.'}</p>", 400
-
-    try:
-        app_id = config_manager.get('deezer.app_id', '')
-        app_secret = config_manager.get('deezer.app_secret', '')
-
-        if not app_id or not app_secret:
-            return "<h1>Missing Credentials</h1><p>Deezer App ID or Secret not configured.</p>", 400
-
-        # Exchange code for token — simple GET request (Deezer's unique approach)
-        token_url = f"https://connect.deezer.com/oauth/access_token.php?app_id={app_id}&secret={app_secret}&code={auth_code}"
-        resp = requests.get(token_url, timeout=15)
-
-        if resp.status_code != 200:
-            return f"<h1>Token Exchange Failed</h1><p>Deezer returned status {resp.status_code}</p>", 400
-
-        # Deezer returns: access_token=TOKEN&expires=SECONDS (URL-encoded, not JSON)
-        import urllib.parse
-        token_data = dict(urllib.parse.parse_qsl(resp.text))
-        access_token = token_data.get('access_token')
-
-        if not access_token:
-            # Try JSON format (some Deezer API versions)
-            try:
-                json_data = resp.json()
-                access_token = json_data.get('access_token')
-            except Exception as e:
-                logger.debug("deezer token json parse failed: %s", e)
-
-        if not access_token:
-            return f"<h1>No Access Token</h1><p>Deezer response: {resp.text[:200]}</p>", 400
-
-        # Save token to config (encrypted at rest)
-        config_manager.set('deezer.access_token', access_token)
-
-        # Reload the global deezer client to pick up the token
-        deezer_client = _get_deezer_client()
-        deezer_client.reload_config()
-
-        add_activity_item("", "Deezer Auth Complete", "Deezer account connected via OAuth", "Now")
-        logger.info("Deezer OAuth authentication successful")
-
-        return """
-        <html><body style="font-family:system-ui;max-width:600px;margin:40px auto;padding:20px;background:#111;color:#eee;text-align:center">
-            <h1>Deezer Authentication Successful!</h1>
-            <p>Your Deezer account is now connected. You can close this window.</p>
-        </body></html>
-        """
-    except Exception as e:
-        logger.error(f"Deezer OAuth callback error: {e}")
-        return f"<h1>Error</h1><p>{e}</p>", 500
 
 
 # --- Beatport Data API ---
@@ -11032,33 +10752,6 @@ def expand_discovery_graph():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/graph/discovery/preview/<deezer_id>', methods=['GET'])
-def get_discovery_preview(deezer_id):
-    """30-second Deezer preview for a discovery candidate's top track (hear it before you add it).
-
-    Deliberately Deezer-only + explicit: the generic top-tracks endpoint routes by the CONFIGURED
-    primary source and resolves ids via the library DB — a candidate isn't in the library, and its
-    Deezer id would be garbage to a Spotify query (whose previews are deprecated anyway).
-    """
-    try:
-        if not str(deezer_id).isdigit():
-            return jsonify({"success": False, "reason": "not_a_deezer_id"}), 400
-        client = _get_deezer_client()
-        if not client:
-            return jsonify({"success": False, "reason": "deezer_unavailable"}), 503
-        tracks = client.get_artist_top_tracks(str(deezer_id), limit=3) or []
-        for t in tracks:
-            if t.get('preview_url'):
-                return jsonify({
-                    "success": True,
-                    "track": t.get('name'),
-                    "artist": ((t.get('artists') or [{}])[0] or {}).get('name'),
-                    "preview_url": t['preview_url'],
-                })
-        return jsonify({"success": False, "reason": "no_preview"})
-    except Exception as e:
-        logger.error("[discovery-preview] failed: %s", e, exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route('/api/library/artist/<int:artist_id>/thumb', methods=['GET'])
@@ -23913,72 +23606,6 @@ def search_itunes_tracks():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/deezer/search_tracks', methods=['GET'])
-def search_deezer_tracks():
-    """Search for tracks on Deezer — used by the import-modal "Search
-    for Match" dialog and by discovery-fix flows.
-
-    Issue #534: Deezer's free-text ranking buries canonical recordings
-    under karaoke / cover / "originally performed by" variants in some
-    regions. The fix here is the local relevance rerank
-    (``core.metadata.relevance.rerank_tracks``) which penalises cover /
-    karaoke / tribute / remaster patterns + boosts exact-artist-match.
-    Catches the user-reported case (karaoke at top) and the inverse
-    (live-version compilation noise) regardless of which Deezer
-    region's ranking the user hits.
-
-    Field-scoped advanced-syntax queries (`track:"X" artist:"Y"`) were
-    initially considered as a second tightening layer, but live-API
-    testing showed Deezer's advanced-query ranking has its own bias —
-    e.g. it surfaced a 2008 Remaster on `track:"Dirty White Boy"
-    artist:"Foreigner"` and didn't return the canonical Head Games cut
-    at all. The free-text path actually returns the canonical
-    recording first more reliably, so this endpoint stays free-text +
-    local rerank. Client-level kwarg support remains in
-    ``DeezerClient.search_tracks`` for future callers (e.g. exact-match
-    flows where filtering is more important than ranking).
-    """
-    try:
-        track_q = request.args.get('track', '').strip()
-        artist_q = request.args.get('artist', '').strip()
-        legacy_query = request.args.get('query', '').strip()
-        limit = int(request.args.get('limit', 20))
-
-        if track_q or artist_q:
-            query = ' '.join(p for p in (track_q, artist_q) if p)
-        elif legacy_query:
-            query = legacy_query
-        else:
-            return jsonify({"error": "Query parameter is required"}), 400
-
-        client = _get_deezer_client()
-        tracks = client.search_tracks(query, limit=limit)
-
-        # Local rerank — only when we have an expected title/artist
-        # signal. Free-text-only searches have nothing to rank against.
-        if track_q or artist_q:
-            from core.metadata.relevance import rerank_tracks
-            tracks = rerank_tracks(
-                tracks,
-                expected_title=track_q,
-                expected_artist=artist_q,
-            )
-
-        tracks_dict = [{
-            'id': t.id,
-            'name': t.name,
-            'artists': t.artists,
-            'album': t.album,
-            'duration_ms': t.duration_ms,
-            'image_url': getattr(t, 'image_url', None),
-            'source': 'deezer'
-        } for t in tracks]
-
-        return jsonify({'tracks': tracks_dict})
-
-    except Exception as e:
-        logger.error(f"Error searching Deezer tracks: {e}")
-        return jsonify({"error": str(e)}), 500
 
 
 @app.route('/api/musicbrainz/search_tracks', methods=['GET'])
@@ -24632,131 +24259,10 @@ def hifi_list_instances():
 # DEEZER DOWNLOAD ENDPOINTS
 # ===================================================================
 
-@app.route('/api/deezer-download/test', methods=['POST'])
-def deezer_download_test():
-    """Test Deezer ARL token authentication."""
-    try:
-        data = request.get_json() or {}
-        # An empty/redaction-sentinel value means "test the SAVED token" — the
-        # settings field round-trips a mask for a saved-but-untouched secret, so
-        # testing it must use the stored ARL, not the mask (#870).
-        arl = config_manager.resolve_secret('deezer_download.arl', data.get('arl'))
-        if not arl:
-            return jsonify({'success': False, 'error': 'No ARL token provided'})
-
-        import requests as req
-        import threading
-
-        session = req.Session()
-        session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-                          '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.9',
-        })
-        session.cookies.set('arl', arl)
-
-        resp = session.post(
-            'https://www.deezer.com/ajax/gw-light.php',
-            params={'method': 'deezer.getUserData', 'api_version': '1.0', 'api_token': 'null'},
-            json={},
-            # (connect, read): a host that blackholes deezer.com (VPS ranges,
-            # blocked regions — #1137) fails in 5s instead of pinning one of
-            # gunicorn's 8 request threads for the full 15 (this test runs
-            # synchronously in the handler, and the settings page auto-fires
-            # every source test on load).
-            timeout=(5, 15)
-        )
-        logger.debug(f"Deezer test raw response status={resp.status_code}, body_preview={resp.text[:500]}")
-        resp.raise_for_status()
-        result = resp.json().get('results', {})
-
-        user = result.get('USER', {})
-        user_id = user.get('USER_ID', 0)
-        logger.info(f"Deezer test: USER_ID={user_id}, keys={list(result.keys())}, user_keys={list(user.keys()) if user else 'none'}")
-        if not user_id or user_id == 0:
-            # Log more detail for debugging
-            error_info = result.get('error', result.get('ERROR', ''))
-            logger.warning(f"Deezer ARL test failed — USER_ID={user_id}, error={error_info}, response_keys={list(result.keys())}")
-            return jsonify({'success': False, 'error': f'Invalid ARL token — Deezer returned no user (USER_ID={user_id})'})
-
-        user_name = user.get('BLOG_NAME', 'Unknown')
-        options = user.get('OPTIONS', {})
-        can_lossless = options.get('web_lossless', False)
-        can_hq = options.get('web_hq', False)
-        tier = 'HiFi' if can_lossless else ('Premium' if can_hq else 'Free')
-
-        return jsonify({'success': True, 'user': user_name, 'tier': tier})
-    except Exception as e:
-        logger.error(f"Deezer download test failed: {e}")
-        return jsonify({'success': False, 'error': str(e)})
 
 
-@app.route('/api/deezer-download/test-search', methods=['GET'])
-def deezer_download_test_search():
-    """Test Deezer download search (temporary testing endpoint)."""
-    try:
-        query = request.args.get('q', '')
-        if not query:
-            return jsonify({'success': False, 'error': 'No query provided'})
-
-        arl = config_manager.get('deezer_download.arl', '')
-        if not arl:
-            return jsonify({'success': False, 'error': 'No ARL configured'})
-
-        from core.deezer_download_client import DeezerDownloadClient
-        client = DeezerDownloadClient()
-        if not client.is_authenticated():
-            client.reconnect(arl)
-        if not client.is_authenticated():
-            return jsonify({'success': False, 'error': 'Authentication failed'})
-
-        tracks, albums = client._search_sync(query)
-        results = []
-        for t in tracks[:10]:
-            results.append({
-                'title': t.title,
-                'artist': t.artist,
-                'album': t.album,
-                'quality': t.quality,
-                'bitrate': t.bitrate,
-                'duration_ms': t.duration,
-                'size': t.size,
-                'filename': t.filename,
-            })
-        return jsonify({'success': True, 'count': len(tracks), 'results': results})
-    except Exception as e:
-        logger.error(f"Deezer search test failed: {e}")
-        return jsonify({'success': False, 'error': str(e)})
 
 
-@app.route('/api/deezer-download/test-download', methods=['POST'])
-def deezer_download_test_download():
-    """Test Deezer download of a single track (temporary testing endpoint)."""
-    try:
-        data = request.get_json() or {}
-        filename = data.get('filename', '')
-        if not filename:
-            return jsonify({'success': False, 'error': 'No filename provided (use track_id||display_name format)'})
-
-        arl = config_manager.get('deezer_download.arl', '')
-        if not arl:
-            return jsonify({'success': False, 'error': 'No ARL configured'})
-
-        from core.deezer_download_client import DeezerDownloadClient
-        client = DeezerDownloadClient()
-        if not client.is_authenticated():
-            client.reconnect(arl)
-        if not client.is_authenticated():
-            return jsonify({'success': False, 'error': 'Authentication failed'})
-
-        download_id = run_async(client.download('deezer_dl', filename))
-        if not download_id:
-            return jsonify({'success': False, 'error': 'Download failed to start'})
-
-        return jsonify({'success': True, 'download_id': download_id, 'message': 'Download started — check logs'})
-    except Exception as e:
-        logger.error(f"Deezer download test failed: {e}")
-        return jsonify({'success': False, 'error': str(e)})
 
 
 # ===================================================================
@@ -24792,40 +24298,10 @@ def _get_tidal_download_client():
         raise RuntimeError("Tidal download client not available — ensure tidalapi is installed")
     return tidal
 
-@app.route('/api/tidal/download/auth/start', methods=['POST'])
-def tidal_download_auth_start():
-    """Start Tidal device-code OAuth flow for download client."""
-    try:
-        tidal_dl = _get_tidal_download_client()
-        result = tidal_dl.start_device_auth()
-        if result:
-            return jsonify({"success": True, **result})
-        else:
-            return jsonify({"error": "Failed to start Tidal auth. Is tidalapi installed?"}), 500
-    except Exception as e:
-        return jsonify({"error": f"Failed to start Tidal auth: {e}"}), 500
 
 
-@app.route('/api/tidal/download/auth/check', methods=['GET'])
-def tidal_download_auth_check():
-    """Check status of Tidal device-code OAuth flow."""
-    try:
-        tidal_dl = _get_tidal_download_client()
-        result = tidal_dl.check_device_auth()
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
 
 
-@app.route('/api/tidal/download/auth/status', methods=['GET'])
-def tidal_download_auth_status():
-    """Check if Tidal download client is authenticated."""
-    try:
-        tidal_dl = _get_tidal_download_client()
-        authenticated = tidal_dl.is_authenticated()
-        return jsonify({"authenticated": authenticated})
-    except Exception as e:
-        return jsonify({"authenticated": False, "error": str(e)})
 
 
 # ===================================================================
@@ -24848,244 +24324,21 @@ def _sync_qobuz_credentials_to_worker():
         logger.debug(f"Could not sync Qobuz credentials to enrichment worker: {e}")
 
 
-@app.route('/api/qobuz/auth/login', methods=['POST'])
-def qobuz_auth_login():
-    """Login to Qobuz with email/password."""
-    try:
-        data = request.get_json()
-        email = data.get('email', '').strip()
-        password = data.get('password', '').strip()
-
-        if not email or not password:
-            return jsonify({"success": False, "error": "Email and password required"}), 400
-
-        qobuz = download_orchestrator.client("qobuz")
-        result = qobuz.login(email, password)
-
-        if result['status'] == 'success':
-            _sync_qobuz_credentials_to_worker()
-            return jsonify({"success": True, **result})
-        else:
-            return jsonify({"success": False, "error": result.get('message', 'Login failed')}), 400
-
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
 
 
-@app.route('/api/qobuz/auth/token', methods=['POST'])
-def qobuz_auth_token():
-    """Login to Qobuz with a pasted user_auth_token (bypasses CAPTCHA)."""
-    try:
-        data = request.get_json()
-        token = data.get('token', '').strip()
-
-        if not token:
-            return jsonify({"success": False, "error": "Auth token required"}), 400
-
-        qobuz = download_orchestrator.client("qobuz")
-        result = qobuz.login_with_token(token)
-
-        if result['status'] == 'success':
-            _sync_qobuz_credentials_to_worker()
-            return jsonify({"success": True, **result})
-        else:
-            return jsonify({"success": False, "error": result.get('message', 'Token login failed')}), 400
-
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
 
 
-@app.route('/api/qobuz/auth/status', methods=['GET'])
-def qobuz_auth_status():
-    """Check if Qobuz client is authenticated."""
-    try:
-        qobuz = download_orchestrator.client("qobuz")
-        authenticated = qobuz.is_authenticated()
-        user_info = {}
-        if authenticated and qobuz.user_info:
-            user_info = {
-                'display_name': qobuz.user_info.get('display_name', ''),
-                'subscription': qobuz.user_info.get('credential', {}).get('label', 'Unknown'),
-            }
-        return jsonify({"authenticated": authenticated, "user": user_info})
-    except Exception as e:
-        return jsonify({"authenticated": False, "error": str(e)})
 
 
-@app.route('/api/qobuz/auth/logout', methods=['POST'])
-def qobuz_auth_logout():
-    """Logout from Qobuz."""
-    try:
-        download_orchestrator.client("qobuz").logout()
-        _sync_qobuz_credentials_to_worker()
-        return jsonify({"success": True})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
 
 
 # ===================================================================
 # TIDAL PLAYLIST API ENDPOINTS
 # ===================================================================
 
-@app.route('/api/tidal/disconnect', methods=['POST'])
-def tidal_disconnect():
-    """Clear saved Tidal auth state. Use when re-authentication doesn't
-    pick up newly-added scopes (e.g. existing token predates a scope
-    expansion and `prompt=consent` alone isn't enough to force fresh
-    consent on this user's auth flow)."""
-    if not tidal_client:
-        return jsonify({"error": "Tidal client not available."}), 500
-    try:
-        tidal_client.disconnect()
-        return jsonify({
-            'success': True,
-            'message': 'Tidal disconnected. Re-authenticate from Settings → Connections.',
-            'authenticated': False,
-        })
-    except Exception as e:
-        logger.error(f"Tidal disconnect error: {e}")
-        return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/tidal/playlists', methods=['GET'])
-def get_tidal_playlists():
-    """Fetches all user playlists from Tidal with full track data (like sync.py)."""
-    client = get_tidal_client_for_profile() or tidal_client
-    if not client or not client.is_authenticated():
-        return jsonify({"error": "Tidal not authenticated."}), 401
-    try:
-        # Use same method as sync.py - this already includes all track data
-        playlists = client.get_user_playlists_metadata_only()
-        
-        playlist_data = []
-        for p in playlists:
-            # Get track count from metadata (set during listing) or actual tracks
-            track_count = getattr(p, 'track_count', 0) or (len(p.tracks) if hasattr(p, 'tracks') and p.tracks else 0)
-            
-            playlist_dict = {
-                "id": p.id, 
-                "name": p.name, 
-                "owner": getattr(p, 'owner', 'Unknown'),
-                "track_count": track_count,
-                "image_url": getattr(p, 'image_url', None),
-                "description": getattr(p, 'description', ''),
-                "tracks": []  # Add tracks data like sync.py
-            }
-            
-            # Include full track data if available (like sync.py has)
-            if hasattr(p, 'tracks') and p.tracks:
-                playlist_dict['tracks'] = [{
-                    'id': t.id,
-                    'name': t.name, 
-                    'artists': t.artists or [],
-                    'album': getattr(t, 'album', 'Unknown Album'),
-                    'duration_ms': getattr(t, 'duration_ms', 0),
-                    'track_number': getattr(t, 'track_number', 0)
-                } for t in p.tracks]
-                
-            playlist_data.append(playlist_dict)
 
-        # Append virtual "Favorite Tracks" playlist at the END (mirrors
-        # Spotify's "Liked Songs" treatment — count-only here, full
-        # track fetch deferred to the per-playlist detail endpoint).
-        # When the saved Tidal token doesn't have `collection.read`
-        # scope (existing tokens predate the scope expansion), the
-        # endpoint returns 401 — we still surface the entry but with
-        # a `needs_reconnect` flag + a reconnect-hint name so the user
-        # has something visible to act on instead of a silently missing
-        # row.
-        try:
-            from core.tidal_client import (
-                COLLECTION_PLAYLIST_ID,
-                COLLECTION_PLAYLIST_NAME,
-                COLLECTION_PLAYLIST_DESCRIPTION,
-            )
-            collection_count = client.get_collection_tracks_count()
-            needs_reconnect = client.collection_needs_reconnect()
-
-            if needs_reconnect:
-                playlist_data.append({
-                    "id": COLLECTION_PLAYLIST_ID,
-                    "name": f"{COLLECTION_PLAYLIST_NAME} (reconnect Tidal to enable)",
-                    "owner": "You",
-                    "track_count": 0,
-                    "image_url": None,
-                    "description": "Reconnect Tidal in Settings → Connections to grant the new collection.read scope.",
-                    "needs_reconnect": True,
-                    "tracks": [],
-                })
-                logger.info(
-                    "Tidal Favorite Tracks: token missing `collection.read` scope — surfacing reconnect hint."
-                )
-            elif collection_count > 0:
-                playlist_data.append({
-                    "id": COLLECTION_PLAYLIST_ID,
-                    "name": COLLECTION_PLAYLIST_NAME,
-                    "owner": "You",
-                    "track_count": collection_count,
-                    "image_url": None,
-                    "description": COLLECTION_PLAYLIST_DESCRIPTION,
-                    "tracks": [],
-                })
-                logger.info(
-                    f"Added virtual '{COLLECTION_PLAYLIST_NAME}' playlist with {collection_count} tracks (count only)"
-                )
-        except Exception as collection_error:
-            logger.error(f"Failed to add Tidal Favorite Tracks playlist: {collection_error}")
-            # Don't fail the entire request if Favorite Tracks fails
-
-        logger.info(f"Loaded {len(playlist_data)} Tidal playlists with track data")
-        return jsonify(playlist_data)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/tidal/playlist/<playlist_id>', methods=['GET'])
-def get_tidal_playlist_tracks(playlist_id):
-    """Fetches full track details for a specific Tidal playlist (matches sync.py pattern)."""
-    client = get_tidal_client_for_profile() or tidal_client
-    if not client or not client.is_authenticated():
-        return jsonify({"error": "Tidal not authenticated."}), 401
-    try:
-        logger.info(f"Getting full Tidal playlist with tracks for: {playlist_id}")
-
-        # Fetch this single playlist directly — no need to re-fetch all playlists.
-        # `get_playlist` recognizes the virtual `tidal-favorites` ID and
-        # dispatches to the userCollectionTracks endpoint internally, so
-        # the rest of this handler treats it identically to a real playlist.
-        full_playlist = client.get_playlist(playlist_id)
-        if not full_playlist:
-            return jsonify({"error": "Playlist not found or unable to access. This may be due to privacy settings or Tidal API restrictions."}), 404
-            
-        if not full_playlist.tracks:
-            return jsonify({"error": "This playlist appears to have no tracks or they cannot be accessed"}), 403
-        
-        logger.info(f"Loaded {len(full_playlist.tracks)} tracks from Tidal playlist: {full_playlist.name}")
-        
-        # Convert playlist to dict (matches sync.py structure)
-        playlist_dict = {
-            'id': full_playlist.id,
-            'name': full_playlist.name,
-            'description': getattr(full_playlist, 'description', ''),
-            'owner': getattr(full_playlist, 'owner', 'Unknown'),
-            'track_count': len(full_playlist.tracks),
-            'image_url': getattr(full_playlist, 'image_url', None),
-            'tracks': []
-        }
-        
-        # Convert tracks to dict format (for discovery modal)
-        playlist_dict['tracks'] = [{
-            'id': t.id,
-            'name': t.name, 
-            'artists': t.artists or [],
-            'album': getattr(t, 'album', 'Unknown Album'),
-            'duration_ms': getattr(t, 'duration_ms', 0),
-            'track_number': getattr(t, 'track_number', 0)
-        } for t in full_playlist.tracks]
-        
-        return jsonify(playlist_dict)
-    except Exception as e:
-        logger.error(f"Error getting Tidal playlist tracks: {e}")
-        return jsonify({"error": str(e)}), 500
 
 
 # ===================================================================
@@ -25096,132 +24349,15 @@ def get_tidal_playlist_tracks(playlist_id):
 tidal_discovery_states = {}  # Key: playlist_id, Value: discovery state
 tidal_discovery_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="tidal_discovery")
 
-@app.route('/api/tidal/discovery/start/<playlist_id>', methods=['POST'])
-def start_tidal_discovery(playlist_id):
-    """Start Spotify discovery process for a Tidal playlist"""
-    try:
-        # Get playlist data from Tidal
-        if not tidal_client or not tidal_client.is_authenticated():
-            return jsonify({"error": "Tidal not authenticated."}), 401
-
-        # Fetch this single playlist directly — no need to re-fetch all playlists
-        target_playlist = tidal_client.get_playlist(playlist_id)
-
-        if not target_playlist:
-            return jsonify({"error": "Tidal playlist not found"}), 404
-
-        if not target_playlist.tracks:
-            return jsonify({"error": "Playlist has no tracks"}), 400
-        
-        # Initialize discovery state if it doesn't exist, or update existing state
-        if playlist_id in tidal_discovery_states:
-            existing_state = tidal_discovery_states[playlist_id]
-            if existing_state['phase'] == 'discovering':
-                return jsonify({"error": "Discovery already in progress"}), 400
-            # Update existing state for discovery
-            existing_state['phase'] = 'discovering'
-            existing_state['status'] = 'discovering' 
-            existing_state['last_accessed'] = time.time()
-            state = existing_state
-        else:
-            # Create new state for first-time discovery
-            state = {
-                'playlist': target_playlist,
-                'phase': 'discovering', # fresh -> discovering -> discovered -> syncing -> sync_complete -> downloading -> download_complete
-                'status': 'discovering',
-                'discovery_progress': 0,
-                'spotify_matches': 0,
-                'spotify_total': len(target_playlist.tracks),
-                'discovery_results': [],
-                'sync_playlist_id': None,
-                'converted_spotify_playlist_id': None,
-                'download_process_id': None,  # Track associated download missing tracks process
-                'created_at': time.time(),
-                'last_accessed': time.time(),
-                'discovery_future': None,
-                'sync_progress': {}
-            }
-            tidal_discovery_states[playlist_id] = state
-        
-        # Add activity for discovery start
-        add_activity_item("", "Tidal Discovery Started", f"'{target_playlist.name}' - {len(target_playlist.tracks)} tracks", "Now")
-        
-        # Start discovery worker (capture profile ID while we have Flask context)
-        state['_profile_id'] = get_current_profile_id()
-        future = tidal_discovery_executor.submit(_run_tidal_discovery_worker, playlist_id)
-        state['discovery_future'] = future
-        
-        logger.info(f"Started Spotify discovery for Tidal playlist: {target_playlist.name}")
-        return jsonify({"success": True, "message": "Discovery started"})
-        
-    except Exception as e:
-        logger.error(f"Error starting Tidal discovery: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/tidal/discovery/status/<playlist_id>', methods=['GET'])
-def get_tidal_discovery_status(playlist_id):
-    """Get real-time discovery status for a Tidal playlist"""
-    return _get_source_discovery_status(tidal_discovery_states, playlist_id, "Tidal discovery not found", "Tidal")
 
 
-@app.route('/api/tidal/discovery/update_match', methods=['POST'])
-def update_tidal_discovery_match():
-    """Update a Tidal discovery result with manually selected Spotify track"""
-    return _update_source_discovery_match(tidal_discovery_states, "tidal", "Tidal", "tidal_track", _first_artist_str_or_obj)
 
 
-@app.route('/api/tidal/playlists/states', methods=['GET'])
-def get_tidal_playlist_states():
-    """Get all stored Tidal playlist discovery states for frontend hydration (similar to YouTube playlists)"""
-    return _get_source_playlist_states(tidal_discovery_states, "Tidal", "Tidal")
 
-@app.route('/api/tidal/state/<playlist_id>', methods=['GET'])
-def get_tidal_playlist_state(playlist_id):
-    """Get specific Tidal playlist state (detailed version matching YouTube's state endpoint)"""
-    try:
-        if playlist_id not in tidal_discovery_states:
-            return jsonify({"error": "Tidal playlist not found"}), 404
-        
-        state = tidal_discovery_states[playlist_id]
-        state['last_accessed'] = time.time()
-        
-        # Return full state information (including results for modal hydration)
-        response = {
-            'playlist_id': playlist_id,
-            'playlist': state['playlist'].__dict__ if hasattr(state['playlist'], '__dict__') else state['playlist'],
-            'phase': state['phase'],
-            'status': state['status'],
-            'discovery_progress': state['discovery_progress'],
-            'spotify_matches': state['spotify_matches'],
-            'spotify_total': state['spotify_total'],
-            'discovery_results': state['discovery_results'],
-            'sync_playlist_id': state.get('sync_playlist_id'),
-            'converted_spotify_playlist_id': state.get('converted_spotify_playlist_id'),
-            'download_process_id': state.get('download_process_id'),
-            'sync_progress': state.get('sync_progress', {}),
-            'last_accessed': state['last_accessed']
-        }
-        
-        return jsonify(response)
-        
-    except Exception as e:
-        logger.error(f"Error getting Tidal playlist state: {e}")
-        return jsonify({"error": str(e)}), 500
 
-@app.route('/api/tidal/reset/<playlist_id>', methods=['POST'])
-def reset_tidal_playlist(playlist_id):
-    """Reset Tidal playlist to fresh phase (clear discovery/sync data)"""
-    return _reset_source_playlist(tidal_discovery_states, playlist_id, "Tidal", "Tidal playlist not found")
 
-@app.route('/api/tidal/delete/<playlist_id>', methods=['POST'])
-def delete_tidal_playlist(playlist_id):
-    """Delete Tidal playlist state completely"""
-    return _delete_source_playlist(tidal_discovery_states, playlist_id, "Tidal", "Tidal playlist not found")
 
-@app.route('/api/tidal/update_phase/<playlist_id>', methods=['POST'])
-def update_tidal_playlist_phase(playlist_id):
-    """Update Tidal playlist phase (used when modal closes to reset from download_complete to discovered)"""
-    return _update_source_playlist_phase(tidal_discovery_states, playlist_id, "Tidal playlist not found", "Tidal", _PHASE_LIST, False)
+
 
 
 _playlist_discovery_cancelled = set()  # Set of automation_ids that have been cancelled
@@ -25643,26 +24779,8 @@ def convert_tidal_results_to_spotify_tracks(discovery_results):
 # TIDAL SYNC API ENDPOINTS
 # ===================================================================
 
-@app.route('/api/tidal/sync/start/<playlist_id>', methods=['POST'])
-def start_tidal_sync(playlist_id):
-    """Start sync process for a Tidal playlist using discovered Spotify tracks"""
-    return _start_source_sync(
-        tidal_discovery_states, playlist_id, sync_id_prefix="tidal",
-        not_found_message="Tidal playlist not found",
-        not_ready_message="Tidal playlist not ready for sync",
-        convert_fn=convert_tidal_results_to_spotify_tracks,
-        name_getter=_pl_name_obj, image_getter=_pl_image_obj,
-        activity_label="Tidal", error_label="Tidal")
 
-@app.route('/api/tidal/sync/status/<playlist_id>', methods=['GET'])
-def get_tidal_sync_status(playlist_id):
-    """Get sync status for a Tidal playlist"""
-    return _get_source_sync_status(tidal_discovery_states, playlist_id, "Tidal playlist not found", "Tidal", "Tidal playlist", _pl_name_attr_or_unknown)
 
-@app.route('/api/tidal/sync/cancel/<playlist_id>', methods=['POST'])
-def cancel_tidal_sync(playlist_id):
-    """Cancel sync for a Tidal playlist"""
-    return _cancel_source_sync(tidal_discovery_states, playlist_id, "Tidal", "Tidal playlist not found")
 
 
 # ===================================================================
@@ -25724,231 +24842,20 @@ def _get_metadata_fallback_client():
             return client
     return _get_itunes_client()
 
-@app.route('/api/deezer/arl-status', methods=['GET'])
-def get_deezer_arl_status():
-    """Check if Deezer ARL is configured and authenticated."""
-    try:
-        deezer_dl = download_orchestrator.client("deezer_dl") if download_orchestrator and hasattr(download_orchestrator, 'client') else None
-        if deezer_dl and deezer_dl.is_authenticated():
-            user_data = deezer_dl._user_data or {}
-            return jsonify({
-                'authenticated': True,
-                'user_name': user_data.get('BLOG_NAME', 'Unknown'),
-                'user_id': user_data.get('USER_ID'),
-            })
-        return jsonify({'authenticated': False})
-    except Exception as e:
-        return jsonify({'authenticated': False, 'error': str(e)})
 
 
-@app.route('/api/deezer/arl-playlists', methods=['GET'])
-def get_deezer_arl_playlists():
-    """Fetch user playlists via Deezer ARL authentication (like /api/spotify/playlists)."""
-    try:
-        deezer_dl = download_orchestrator.client("deezer_dl") if download_orchestrator and hasattr(download_orchestrator, 'client') else None
-        if not deezer_dl or not deezer_dl.is_authenticated():
-            return jsonify({'error': 'Deezer ARL not authenticated. Configure your ARL token in Settings > Downloads.'}), 401
-
-        playlists = deezer_dl.get_user_playlists()
-
-        # Add sync_status field to match Spotify format
-        playlist_data = []
-        for p in playlists:
-            playlist_data.append({
-                'id': p['id'],
-                'name': p['name'],
-                'owner': p.get('owner', ''),
-                'track_count': p.get('track_count', 0),
-                'image_url': p.get('image_url', ''),
-                'sync_status': 'Never Synced',
-            })
-
-        logger.info(f"Loaded {len(playlist_data)} Deezer user playlists via ARL")
-        return jsonify(playlist_data)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/deezer/arl-playlist/<playlist_id>', methods=['GET'])
-def get_deezer_arl_playlist_tracks(playlist_id):
-    """Fetch full playlist with tracks via ARL (like /api/spotify/playlist/<id>)."""
-    try:
-        deezer_dl = download_orchestrator.client("deezer_dl") if download_orchestrator and hasattr(download_orchestrator, 'client') else None
-        if not deezer_dl or not deezer_dl.is_authenticated():
-            return jsonify({'error': 'Deezer ARL not authenticated.'}), 401
-
-        playlist = deezer_dl.get_playlist_tracks(playlist_id)
-        if not playlist:
-            return jsonify({'error': 'Playlist not found or unable to access.'}), 404
-
-        logger.info(f"Loaded {len(playlist.get('tracks', []))} tracks from Deezer playlist: {playlist.get('name')}")
-        return jsonify(playlist)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/deezer/playlist/<playlist_id>', methods=['GET'])
-def get_deezer_playlist(playlist_id):
-    """Fetch a Deezer playlist by ID or URL"""
-    try:
-        from core.deezer_client import DeezerClient
 
-        # Parse URL if needed
-        parsed_id = DeezerClient.parse_playlist_url(playlist_id)
-        if not parsed_id:
-            return jsonify({"error": "Invalid Deezer playlist ID or URL"}), 400
 
-        client = _get_deezer_client()
-        playlist = client.get_playlist(parsed_id)
 
-        if not playlist:
-            return jsonify({"error": "Deezer playlist not found"}), 404
 
-        return jsonify(playlist)
 
-    except Exception as e:
-        logger.error(f"Error fetching Deezer playlist: {e}")
-        return jsonify({"error": str(e)}), 500
 
-@app.route('/api/deezer/discovery/start/<playlist_id>', methods=['POST'])
-def start_deezer_discovery(playlist_id):
-    """Start Spotify discovery process for a Deezer playlist"""
-    try:
-        from core.deezer_client import DeezerClient
 
-        # Parse URL if needed
-        parsed_id = DeezerClient.parse_playlist_url(playlist_id)
-        if parsed_id:
-            playlist_id = parsed_id
 
-        # Initialize discovery state if it doesn't exist, or update existing state
-        if playlist_id in deezer_discovery_states:
-            existing_state = deezer_discovery_states[playlist_id]
-            if existing_state['phase'] == 'discovering':
-                return jsonify({"error": "Discovery already in progress"}), 400
-
-            # Fetch fresh playlist data if not already stored
-            if not existing_state.get('playlist'):
-                client = _get_deezer_client()
-                playlist_data = client.get_playlist(playlist_id)
-                if not playlist_data:
-                    return jsonify({"error": "Deezer playlist not found"}), 404
-                existing_state['playlist'] = playlist_data
-
-            # Update existing state for discovery
-            existing_state['phase'] = 'discovering'
-            existing_state['status'] = 'discovering'
-            existing_state['last_accessed'] = time.time()
-            state = existing_state
-        else:
-            # Fetch playlist data from Deezer
-            client = _get_deezer_client()
-            playlist_data = client.get_playlist(playlist_id)
-
-            if not playlist_data:
-                return jsonify({"error": "Deezer playlist not found"}), 404
-
-            if not playlist_data.get('tracks'):
-                return jsonify({"error": "Playlist has no tracks"}), 400
-
-            # Create new state for first-time discovery
-            state = {
-                'playlist': playlist_data,
-                'phase': 'discovering',  # fresh -> discovering -> discovered -> syncing -> sync_complete -> downloading -> download_complete
-                'status': 'discovering',
-                'discovery_progress': 0,
-                'spotify_matches': 0,
-                'spotify_total': len(playlist_data['tracks']),
-                'discovery_results': [],
-                'sync_playlist_id': None,
-                'converted_spotify_playlist_id': None,
-                'download_process_id': None,
-                'created_at': time.time(),
-                'last_accessed': time.time(),
-                'discovery_future': None,
-                'sync_progress': {}
-            }
-            deezer_discovery_states[playlist_id] = state
-
-        # Add activity for discovery start
-        playlist_name = state['playlist']['name']
-        track_count = len(state['playlist']['tracks'])
-        add_activity_item("", "Deezer Discovery Started", f"'{playlist_name}' - {track_count} tracks", "Now")
-
-        # Start discovery worker (capture profile ID while we have Flask context)
-        deezer_discovery_states[playlist_id]['_profile_id'] = get_current_profile_id()
-        future = deezer_discovery_executor.submit(_run_deezer_discovery_worker, playlist_id)
-        state['discovery_future'] = future
-
-        logger.info(f"Started Spotify discovery for Deezer playlist: {playlist_name}")
-        return jsonify({"success": True, "message": "Discovery started"})
-
-    except Exception as e:
-        logger.error(f"Error starting Deezer discovery: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/deezer/discovery/status/<playlist_id>', methods=['GET'])
-def get_deezer_discovery_status(playlist_id):
-    """Get real-time discovery status for a Deezer playlist"""
-    return _get_source_discovery_status(deezer_discovery_states, playlist_id, "Deezer discovery not found", "Deezer")
-
-@app.route('/api/deezer/discovery/update_match', methods=['POST'])
-def update_deezer_discovery_match():
-    """Update a Deezer discovery result with manually selected Spotify track"""
-    return _update_source_discovery_match(deezer_discovery_states, "deezer", "Deezer", "deezer_track", _first_artist_plain)
-
-@app.route('/api/deezer/playlists/states', methods=['GET'])
-def get_deezer_playlist_states():
-    """Get all stored Deezer playlist discovery states for frontend hydration"""
-    return _get_source_playlist_states(deezer_discovery_states, "Deezer", "Deezer")
-
-@app.route('/api/deezer/state/<playlist_id>', methods=['GET'])
-def get_deezer_playlist_state(playlist_id):
-    """Get specific Deezer playlist state (detailed version)"""
-    try:
-        if playlist_id not in deezer_discovery_states:
-            return jsonify({"error": "Deezer playlist not found"}), 404
-
-        state = deezer_discovery_states[playlist_id]
-        state['last_accessed'] = time.time()
-
-        # Deezer playlist is a dict, no __dict__ needed
-        response = {
-            'playlist_id': playlist_id,
-            'playlist': state['playlist'],
-            'phase': state['phase'],
-            'status': state['status'],
-            'discovery_progress': state['discovery_progress'],
-            'spotify_matches': state['spotify_matches'],
-            'spotify_total': state['spotify_total'],
-            'discovery_results': state['discovery_results'],
-            'sync_playlist_id': state.get('sync_playlist_id'),
-            'converted_spotify_playlist_id': state.get('converted_spotify_playlist_id'),
-            'download_process_id': state.get('download_process_id'),
-            'sync_progress': state.get('sync_progress', {}),
-            'last_accessed': state['last_accessed']
-        }
-
-        return jsonify(response)
-
-    except Exception as e:
-        logger.error(f"Error getting Deezer playlist state: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/deezer/reset/<playlist_id>', methods=['POST'])
-def reset_deezer_playlist(playlist_id):
-    """Reset Deezer playlist to fresh phase (clear discovery/sync data)"""
-    return _reset_source_playlist(deezer_discovery_states, playlist_id, "Deezer", "Deezer playlist not found")
-
-@app.route('/api/deezer/delete/<playlist_id>', methods=['POST'])
-def delete_deezer_playlist(playlist_id):
-    """Delete Deezer playlist state completely"""
-    return _delete_source_playlist(deezer_discovery_states, playlist_id, "Deezer", "Deezer playlist not found")
-
-@app.route('/api/deezer/update_phase/<playlist_id>', methods=['POST'])
-def update_deezer_playlist_phase(playlist_id):
-    """Update Deezer playlist phase (used when modal closes to reset from download_complete to discovered)"""
-    return _update_source_playlist_phase(deezer_discovery_states, playlist_id, "Deezer playlist not found", "Deezer", _PHASE_LIST, True)
 
 
 # Deezer discovery worker logic lives in core/discovery/deezer.py.
@@ -25988,26 +24895,8 @@ def convert_deezer_results_to_spotify_tracks(discovery_results):
 # DEEZER SYNC API ENDPOINTS
 # ===================================================================
 
-@app.route('/api/deezer/sync/start/<playlist_id>', methods=['POST'])
-def start_deezer_sync(playlist_id):
-    """Start sync process for a Deezer playlist using discovered Spotify tracks"""
-    return _start_source_sync(
-        deezer_discovery_states, playlist_id, sync_id_prefix="deezer",
-        not_found_message="Deezer playlist not found",
-        not_ready_message="Deezer playlist not ready for sync",
-        convert_fn=convert_deezer_results_to_spotify_tracks,
-        name_getter=_pl_name_strict, image_getter=_pl_image_dict,
-        activity_label="Deezer", error_label="Deezer")
 
-@app.route('/api/deezer/sync/status/<playlist_id>', methods=['GET'])
-def get_deezer_sync_status(playlist_id):
-    """Get sync status for a Deezer playlist"""
-    return _get_source_sync_status(deezer_discovery_states, playlist_id, "Deezer playlist not found", "Deezer", "Deezer playlist", _pl_name_strict)
 
-@app.route('/api/deezer/sync/cancel/<playlist_id>', methods=['POST'])
-def cancel_deezer_sync(playlist_id):
-    """Cancel sync for a Deezer playlist"""
-    return _cancel_source_sync(deezer_discovery_states, playlist_id, "Deezer", "Deezer playlist not found")
 
 
 # ===================================================================
@@ -26041,229 +24930,24 @@ def _get_qobuz_client_for_sync():
         return None
 
 
-@app.route('/api/qobuz/playlists', methods=['GET'])
-def get_qobuz_playlists():
-    """Fetches the authenticated user's Qobuz playlists (metadata only).
-
-    Tracks are fetched on demand by the per-playlist detail endpoint —
-    matches the Tidal + Deezer behaviour so the Sync page renderer can
-    treat all three services uniformly.
-    """
-    qobuz = _get_qobuz_client_for_sync()
-    if not qobuz or not qobuz.is_authenticated():
-        return jsonify({"error": "Qobuz not authenticated."}), 401
-
-    try:
-        playlists = qobuz.get_user_playlists()
-
-        playlist_data = []
-        for p in playlists:
-            playlist_data.append({
-                "id": p['id'],
-                "name": p['name'],
-                "owner": "You",
-                "track_count": p.get('track_count', 0),
-                "image_url": p.get('image_url') or None,
-                "description": p.get('description', ''),
-                "tracks": []
-            })
-
-        # Append virtual "Favorite Tracks" entry at the END (mirrors
-        # Tidal's COLLECTION_PLAYLIST_ID pattern — count only here, full
-        # fetch deferred to the per-playlist detail endpoint).
-        try:
-            from core.qobuz_client import QobuzClient as _QobuzClientTypeRef
-            favorites_count = qobuz.get_user_favorite_tracks_count()
-            if favorites_count > 0:
-                playlist_data.append({
-                    "id": qobuz.QOBUZ_FAVORITES_ID,
-                    "name": qobuz.QOBUZ_FAVORITES_NAME,
-                    "owner": "You",
-                    "track_count": favorites_count,
-                    "image_url": None,
-                    "description": qobuz.QOBUZ_FAVORITES_DESCRIPTION,
-                    "tracks": [],
-                })
-                logger.info(
-                    f"Added virtual '{qobuz.QOBUZ_FAVORITES_NAME}' playlist with {favorites_count} tracks (count only)"
-                )
-        except Exception as favorites_error:
-            logger.error(f"Failed to add Qobuz Favorite Tracks playlist: {favorites_error}")
-
-        logger.info(f"Loaded {len(playlist_data)} Qobuz playlists")
-        return jsonify(playlist_data)
-    except Exception as e:
-        logger.error(f"Error loading Qobuz playlists: {e}")
-        return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/qobuz/playlist/<playlist_id>', methods=['GET'])
-def get_qobuz_playlist_tracks(playlist_id):
-    """Fetches full track details for a specific Qobuz playlist."""
-    qobuz = _get_qobuz_client_for_sync()
-    if not qobuz or not qobuz.is_authenticated():
-        return jsonify({"error": "Qobuz not authenticated."}), 401
-
-    try:
-        logger.info(f"Getting full Qobuz playlist with tracks for: {playlist_id}")
-        full_playlist = qobuz.get_playlist(playlist_id)
-        if not full_playlist:
-            return jsonify({"error": "Playlist not found or unable to access."}), 404
-
-        tracks = full_playlist.get('tracks') or []
-        if not tracks:
-            return jsonify({"error": "This playlist appears to have no tracks or they cannot be accessed"}), 403
-
-        logger.info(f"Loaded {len(tracks)} tracks from Qobuz playlist: {full_playlist['name']}")
-
-        playlist_dict = {
-            'id': full_playlist['id'],
-            'name': full_playlist['name'],
-            'description': full_playlist.get('description', ''),
-            'owner': 'You',
-            'track_count': len(tracks),
-            'image_url': full_playlist.get('image_url') or None,
-            'tracks': tracks,
-        }
-        return jsonify(playlist_dict)
-    except Exception as e:
-        logger.error(f"Error getting Qobuz playlist tracks: {e}")
-        return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/qobuz/discovery/start/<playlist_id>', methods=['POST'])
-def start_qobuz_discovery(playlist_id):
-    """Start Spotify discovery process for a Qobuz playlist."""
-    try:
-        qobuz = _get_qobuz_client_for_sync()
-        if not qobuz or not qobuz.is_authenticated():
-            return jsonify({"error": "Qobuz not authenticated."}), 401
-
-        if playlist_id in qobuz_discovery_states:
-            existing_state = qobuz_discovery_states[playlist_id]
-            if existing_state['phase'] == 'discovering':
-                return jsonify({"error": "Discovery already in progress"}), 400
-
-            if not existing_state.get('playlist'):
-                playlist_data = qobuz.get_playlist(playlist_id)
-                if not playlist_data:
-                    return jsonify({"error": "Qobuz playlist not found"}), 404
-                existing_state['playlist'] = playlist_data
-
-            existing_state['phase'] = 'discovering'
-            existing_state['status'] = 'discovering'
-            existing_state['last_accessed'] = time.time()
-            state = existing_state
-        else:
-            playlist_data = qobuz.get_playlist(playlist_id)
-
-            if not playlist_data:
-                return jsonify({"error": "Qobuz playlist not found"}), 404
-
-            if not playlist_data.get('tracks'):
-                return jsonify({"error": "Playlist has no tracks"}), 400
-
-            state = {
-                'playlist': playlist_data,
-                'phase': 'discovering',
-                'status': 'discovering',
-                'discovery_progress': 0,
-                'spotify_matches': 0,
-                'spotify_total': len(playlist_data['tracks']),
-                'discovery_results': [],
-                'sync_playlist_id': None,
-                'converted_spotify_playlist_id': None,
-                'download_process_id': None,
-                'created_at': time.time(),
-                'last_accessed': time.time(),
-                'discovery_future': None,
-                'sync_progress': {}
-            }
-            qobuz_discovery_states[playlist_id] = state
-
-        playlist_name = state['playlist']['name']
-        track_count = len(state['playlist']['tracks'])
-        add_activity_item("", "Qobuz Discovery Started", f"'{playlist_name}' - {track_count} tracks", "Now")
-
-        qobuz_discovery_states[playlist_id]['_profile_id'] = get_current_profile_id()
-        future = qobuz_discovery_executor.submit(_run_qobuz_discovery_worker, playlist_id)
-        state['discovery_future'] = future
-
-        logger.info(f"Started Spotify discovery for Qobuz playlist: {playlist_name}")
-        return jsonify({"success": True, "message": "Discovery started"})
-
-    except Exception as e:
-        logger.error(f"Error starting Qobuz discovery: {e}")
-        return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/qobuz/discovery/status/<playlist_id>', methods=['GET'])
-def get_qobuz_discovery_status(playlist_id):
-    """Get real-time discovery status for a Qobuz playlist."""
-    return _get_source_discovery_status(qobuz_discovery_states, playlist_id, "Qobuz discovery not found", "Qobuz")
 
 
-@app.route('/api/qobuz/discovery/update_match', methods=['POST'])
-def update_qobuz_discovery_match():
-    """Update a Qobuz discovery result with manually selected Spotify track"""
-    return _update_source_discovery_match(qobuz_discovery_states, "qobuz", "Qobuz", "qobuz_track", _first_artist_plain)
 
 
-@app.route('/api/qobuz/playlists/states', methods=['GET'])
-def get_qobuz_playlist_states():
-    """Get all stored Qobuz playlist discovery states for frontend hydration."""
-    return _get_source_playlist_states(qobuz_discovery_states, "Qobuz", "Qobuz")
 
 
-@app.route('/api/qobuz/state/<playlist_id>', methods=['GET'])
-def get_qobuz_playlist_state(playlist_id):
-    """Get specific Qobuz playlist state (detailed version)."""
-    try:
-        if playlist_id not in qobuz_discovery_states:
-            return jsonify({"error": "Qobuz playlist not found"}), 404
-
-        state = qobuz_discovery_states[playlist_id]
-        state['last_accessed'] = time.time()
-
-        response = {
-            'playlist_id': playlist_id,
-            'playlist': state['playlist'],
-            'phase': state['phase'],
-            'status': state['status'],
-            'discovery_progress': state['discovery_progress'],
-            'spotify_matches': state['spotify_matches'],
-            'spotify_total': state['spotify_total'],
-            'discovery_results': state['discovery_results'],
-            'sync_playlist_id': state.get('sync_playlist_id'),
-            'converted_spotify_playlist_id': state.get('converted_spotify_playlist_id'),
-            'download_process_id': state.get('download_process_id'),
-            'sync_progress': state.get('sync_progress', {}),
-            'last_accessed': state['last_accessed']
-        }
-
-        return jsonify(response)
-
-    except Exception as e:
-        logger.error(f"Error getting Qobuz playlist state: {e}")
-        return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/qobuz/reset/<playlist_id>', methods=['POST'])
-def reset_qobuz_playlist(playlist_id):
-    """Reset Qobuz playlist to fresh phase (clear discovery/sync data)."""
-    return _reset_source_playlist(qobuz_discovery_states, playlist_id, "Qobuz", "Qobuz playlist not found")
 
 
-@app.route('/api/qobuz/delete/<playlist_id>', methods=['POST'])
-def delete_qobuz_playlist(playlist_id):
-    """Delete Qobuz playlist state completely."""
-    return _delete_source_playlist(qobuz_discovery_states, playlist_id, "Qobuz", "Qobuz playlist not found")
 
 
-@app.route('/api/qobuz/update_phase/<playlist_id>', methods=['POST'])
-def update_qobuz_playlist_phase(playlist_id):
-    """Update Qobuz playlist phase (used when modal closes to reset from download_complete to discovered)."""
-    return _update_source_playlist_phase(qobuz_discovery_states, playlist_id, "Qobuz playlist not found", "Qobuz", _PHASE_LIST, True)
 
 
 # Qobuz discovery worker logic lives in core/discovery/qobuz.py.
@@ -26302,28 +24986,10 @@ def convert_qobuz_results_to_spotify_tracks(discovery_results):
 # QOBUZ SYNC API ENDPOINTS
 # ===================================================================
 
-@app.route('/api/qobuz/sync/start/<playlist_id>', methods=['POST'])
-def start_qobuz_sync(playlist_id):
-    """Start sync process for a Qobuz playlist using discovered Spotify tracks."""
-    return _start_source_sync(
-        qobuz_discovery_states, playlist_id, sync_id_prefix="qobuz",
-        not_found_message="Qobuz playlist not found",
-        not_ready_message="Qobuz playlist not ready for sync",
-        convert_fn=convert_qobuz_results_to_spotify_tracks,
-        name_getter=_pl_name_strict, image_getter=_pl_image_dict,
-        activity_label="Qobuz", error_label="Qobuz")
 
 
-@app.route('/api/qobuz/sync/status/<playlist_id>', methods=['GET'])
-def get_qobuz_sync_status(playlist_id):
-    """Get sync status for a Qobuz playlist."""
-    return _get_source_sync_status(qobuz_discovery_states, playlist_id, "Qobuz playlist not found", "Qobuz", "Qobuz playlist", _pl_name_strict)
 
 
-@app.route('/api/qobuz/sync/cancel/<playlist_id>', methods=['POST'])
-def cancel_qobuz_sync(playlist_id):
-    """Cancel sync for a Qobuz playlist."""
-    return _cancel_source_sync(qobuz_discovery_states, playlist_id, "Qobuz", "Qobuz playlist not found")
 
 
 # ===================================================================
@@ -27422,84 +26088,6 @@ def get_youtube_discovery_status(url_hash):
     return _get_source_discovery_status(youtube_playlist_states, url_hash, "YouTube playlist not found", "YouTube")
 
 
-@app.route('/api/youtube/discovery/unmatch', methods=['POST'])
-@app.route('/api/tidal/discovery/unmatch', methods=['POST'])
-@app.route('/api/deezer/discovery/unmatch', methods=['POST'])
-@app.route('/api/spotify-public/discovery/unmatch', methods=['POST'])
-@app.route('/api/itunes-link/discovery/unmatch', methods=['POST'])
-@app.route('/api/beatport/discovery/unmatch', methods=['POST'])
-@app.route('/api/listenbrainz/discovery/unmatch', methods=['POST'])
-def unmatch_discovery_track():
-    """Remove a discovery match — sets track back to Not Found"""
-    try:
-        data = request.get_json()
-        identifier = data.get('identifier')
-        track_index = data.get('track_index')
-
-        if not identifier or track_index is None:
-            return jsonify({'success': False, 'error': 'Missing required fields'}), 400
-
-        # Find the state dict for this discovery
-        state = (youtube_playlist_states.get(identifier)
-                 or tidal_discovery_states.get(identifier)
-                 or deezer_discovery_states.get(identifier)
-                 or spotify_public_discovery_states.get(identifier)
-                 or itunes_link_discovery_states.get(identifier)
-                 or beatport_chart_states.get(identifier)
-                 or listenbrainz_playlist_states.get(identifier))
-
-        if not state:
-            return jsonify({'success': False, 'error': 'Discovery state not found'}), 404
-
-        results = state.get('discovery_results', [])
-        if track_index >= len(results):
-            return jsonify({'success': False, 'error': 'Invalid track index'}), 400
-
-        result = results[track_index]
-        old_status = result.get('status_class')
-
-        # Clear the match
-        result['status'] = 'Not Found'
-        result['status_class'] = 'not-found'
-        result['spotify_track'] = ''
-        result['spotify_artist'] = ''
-        result['spotify_album'] = ''
-        result['spotify_data'] = None
-        result['matched_data'] = None
-        result['match_data'] = None
-        result['confidence'] = 0
-        result['wing_it_fallback'] = False
-        result['manual_match'] = False
-
-        # Update match count
-        if old_status in ('found', 'wing-it'):
-            state['spotify_matches'] = max(0, state.get('spotify_matches', 0) - 1)
-        if old_status == 'wing-it':
-            state['wing_it_count'] = max(0, state.get('wing_it_count', 0) - 1)
-
-        # If mirrored playlist, also clear in DB
-        if identifier.startswith('mirrored_'):
-            try:
-                db = get_database()
-                tracks = state.get('tracks', [])
-                if track_index < len(tracks):
-                    db_track_id = tracks[track_index].get('db_track_id')
-                    if db_track_id:
-                        db.update_mirrored_track_extra_data(db_track_id, {
-                            'discovered': False,
-                            'discovery_attempted': True,
-                            'provider': '',
-                            'unmatched_by_user': True,
-                        })
-            except Exception as e:
-                logger.error(f"Error clearing mirrored track match: {e}")
-
-        logger.info(f"Unmatched discovery track {track_index}: {result.get('yt_track', result.get('lb_track', ''))}")
-        return jsonify({'success': True})
-
-    except Exception as e:
-        logger.error(f"Error unmatching discovery track: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/youtube/discovery/update_match', methods=['POST'])
@@ -29289,78 +27877,9 @@ def _validate_lb_token(token, base_url=''):
     except Exception as e:
         return False, f"ListenBrainz connection error: {str(e)}"
 
-@app.route('/api/profiles/me/listenbrainz', methods=['GET'])
-def get_profile_listenbrainz():
-    """Get current profile's ListenBrainz connection status"""
-    try:
-        profile_id = get_current_profile_id()
-        token, base_url, username, source = _get_lb_credentials_for_profile(profile_id)
-        connected = bool(token)
-        return jsonify({
-            'success': True,
-            'connected': connected,
-            'username': username if connected else None,
-            'base_url': base_url or '',
-            'source': source
-        })
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
 
-@app.route('/api/profiles/me/listenbrainz', methods=['POST'])
-def save_profile_listenbrainz():
-    """Save ListenBrainz credentials for current profile"""
-    try:
-        data = request.json or {}
-        token = data.get('token', '').strip()
-        base_url = data.get('base_url', '').strip()
 
-        if not token:
-            return jsonify({'success': False, 'error': 'Token is required'}), 400
 
-        # Validate token first
-        valid, result = _validate_lb_token(token, base_url)
-        if not valid:
-            return jsonify({'success': False, 'error': result}), 400
-
-        username = result
-        profile_id = get_current_profile_id()
-        db = get_database()
-        success = db.set_profile_listenbrainz(profile_id, token, base_url, username)
-
-        if success:
-            return jsonify({'success': True, 'username': username})
-        return jsonify({'success': False, 'error': 'Failed to save credentials'}), 500
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@app.route('/api/profiles/me/listenbrainz', methods=['DELETE'])
-def delete_profile_listenbrainz():
-    """Clear ListenBrainz credentials for current profile"""
-    try:
-        profile_id = get_current_profile_id()
-        db = get_database()
-        db.clear_profile_listenbrainz(profile_id)
-        return jsonify({'success': True})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@app.route('/api/profiles/me/listenbrainz/test', methods=['POST'])
-def test_profile_listenbrainz():
-    """Test a ListenBrainz token without saving"""
-    try:
-        data = request.json or {}
-        token = data.get('token', '').strip()
-        base_url = data.get('base_url', '').strip()
-
-        if not token:
-            return jsonify({'success': False, 'error': 'Token is required'}), 400
-
-        valid, result = _validate_lb_token(token, base_url)
-        if valid:
-            return jsonify({'success': True, 'username': result})
-        return jsonify({'success': False, 'error': result})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
 
 # --- Per-Profile Service Credentials API ---
 
@@ -29790,7 +28309,7 @@ def get_active_sources():
         # fallback_source='spotify' + metadata.spotify_free=true, NOT a literal
         # 'spotify_free' fallback value. Mirror that mapping so the modal agrees
         # with the Settings dropdown (settings.js _metaSel / save logic).
-        _fb = config_manager.get('metadata.fallback_source', 'deezer') or 'deezer'
+        _fb = config_manager.get('metadata.fallback_source', 'itunes') or 'itunes'
         _free = config_manager.get('metadata.spotify_free', False)
         meta_active = 'spotify_free' if (_fb == 'spotify' and _free) else _fb
         meta_effective = 'spotify_free' if meta_active == 'spotify_free' else _get_metadata_fallback_source()
@@ -30133,34 +28652,6 @@ def _run_playlist_export(job_id, playlist_id, title, mode):
         job['error'] = str(e)
 
 
-@app.route('/api/playlists/<playlist_id>/export/listenbrainz', methods=['POST'])
-def start_playlist_export_listenbrainz(playlist_id):
-    """Start a background export of a mirrored playlist to ListenBrainz/JSPF.
-
-    Body: {"mode": "download"|"push"} (default "download"). Returns {job_id} to poll."""
-    try:
-        body = request.get_json(silent=True) or {}
-        mode = 'push' if body.get('mode') == 'push' else 'download'
-        db = get_database()
-        meta = _owned_mirrored_playlist(db, int(playlist_id))
-        if not meta:
-            return jsonify({"success": False, "error": "Playlist not found"}), 404
-        title = (meta.get('name') or meta.get('title') or 'SoulSync Export').strip() or 'SoulSync Export'
-
-        import uuid
-        job_id = uuid.uuid4().hex
-        with _playlist_export_jobs_lock:
-            _playlist_export_jobs[job_id] = {
-                'job_id': job_id, 'playlist_id': str(playlist_id), 'title': title,
-                'mode': mode, 'phase': 'starting', 'done': 0, 'total': 0,
-                'stats': {}, 'error': None,
-            }
-        t = threading.Thread(target=_run_playlist_export, args=(job_id, playlist_id, title, mode), daemon=True)
-        t.start()
-        return jsonify({"success": True, "job_id": job_id})
-    except Exception as e:
-        logger.error(f"Playlist export start failed: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route('/api/playlists/<playlist_id>/export/service/<service>', methods=['POST'])
@@ -34825,93 +33316,12 @@ def _get_lb_discover_playlists(playlist_type):
         "source": source
     })
 
-@app.route('/api/discover/listenbrainz/created-for', methods=['GET'])
-def get_listenbrainz_created_for():
-    """Get playlists created for the user by ListenBrainz (from cache)"""
-    try:
-        return _get_lb_discover_playlists('created_for')
-    except Exception as e:
-        logger.error(f"Error getting cached ListenBrainz created-for playlists: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"success": False, "error": str(e)}), 500
 
-@app.route('/api/discover/listenbrainz/user-playlists', methods=['GET'])
-def get_listenbrainz_user_playlists():
-    """Get user's own ListenBrainz playlists (from cache)"""
-    try:
-        return _get_lb_discover_playlists('user')
-    except Exception as e:
-        logger.error(f"Error getting cached ListenBrainz user playlists: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"success": False, "error": str(e)}), 500
 
-@app.route('/api/discover/listenbrainz/collaborative', methods=['GET'])
-def get_listenbrainz_collaborative():
-    """Get collaborative ListenBrainz playlists (from cache)"""
-    try:
-        return _get_lb_discover_playlists('collaborative')
-    except Exception as e:
-        logger.error(f"Error getting cached ListenBrainz collaborative playlists: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"success": False, "error": str(e)}), 500
 
-@app.route('/api/discover/listenbrainz/playlist/<playlist_mbid>', methods=['GET'])
-def get_listenbrainz_playlist_tracks(playlist_mbid):
-    """Get tracks from a specific ListenBrainz playlist (from cache, with on-demand refresh)"""
-    try:
-        lb_manager, username, source = _get_profile_lb_manager()
-        tracks = lb_manager.get_cached_tracks(playlist_mbid)
-
-        if not tracks:
-            # Cache miss or stale entry with no tracks — try fetching from LB API
-            if lb_manager.client.is_authenticated():
-                logger.debug(f"Cache miss for playlist {playlist_mbid}, fetching from ListenBrainz...")
-                # Remove stale playlist row (if any) so _update_playlist doesn't
-                # skip due to matching track_count with 0 actual tracks
-                existing_type = lb_manager.get_playlist_type(playlist_mbid) or 'created_for'
-                lb_manager.delete_cached_playlist(playlist_mbid)
-                full_playlist = lb_manager.client.get_playlist_details(playlist_mbid)
-                if full_playlist:
-                    lb_manager._update_playlist(full_playlist, existing_type)
-                    tracks = lb_manager.get_cached_tracks(playlist_mbid)
-
-        if not tracks:
-            return jsonify({
-                "success": False,
-                "error": "Playlist not found in cache"
-            }), 404
-
-        return jsonify({
-            "success": True,
-            "tracks": tracks,
-            "track_count": len(tracks)
-        })
-
-    except Exception as e:
-        logger.error(f"Error getting cached ListenBrainz playlist tracks: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"success": False, "error": str(e)}), 500
 
 
 # Manual refresh endpoint for ListenBrainz
-@app.route('/api/discover/listenbrainz/refresh', methods=['POST'])
-def refresh_listenbrainz():
-    """Manually refresh ListenBrainz playlists cache"""
-    try:
-        lb_manager, username, source = _get_profile_lb_manager()
-        result = lb_manager.update_all_playlists()
-
-        return jsonify(result)
-
-    except Exception as e:
-        logger.error(f"Error refreshing ListenBrainz: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"success": False, "error": str(e)}), 500
 
 # ========================================
 # LAST.FM TRACK RADIO
@@ -35137,306 +33547,13 @@ def _lb_state_key(playlist_mbid, profile_id=None):
         profile_id = get_current_profile_id()
     return f"{profile_id}:{playlist_mbid}"
 
-@app.route('/api/listenbrainz/playlists', methods=['GET'])
-def get_all_listenbrainz_playlists():
-    """Get all stored ListenBrainz playlists for frontend hydration (scoped to current profile)"""
-    try:
-        playlists = []
-        current_time = time.time()
-        profile_id = get_current_profile_id()
-        prefix = f"{profile_id}:"
 
-        for state_key, state in listenbrainz_playlist_states.items():
-            if not state_key.startswith(prefix):
-                continue
-            # Update access time when requested
-            state['last_accessed'] = current_time
-            playlist_mbid = state_key[len(prefix):]
 
-            # Return essential data for card recreation
-            playlist_info = {
-                'playlist_mbid': playlist_mbid,
-                'playlist': state['playlist'],
-                'phase': state['phase'],
-                'status': state['status'],
-                'discovery_progress': state['discovery_progress'],
-                'spotify_matches': state['spotify_matches'],
-                'spotify_total': state['spotify_total'],
-                'converted_spotify_playlist_id': state.get('converted_spotify_playlist_id'),
-                'download_process_id': state.get('download_process_id'),
-                'created_at': state['created_at'],
-                'last_accessed': state['last_accessed']
-            }
-            playlists.append(playlist_info)
 
-        logger.info(f"Returning {len(playlists)} stored ListenBrainz playlists for profile {profile_id}")
-        return jsonify({"playlists": playlists})
 
-    except Exception as e:
-        logger.error(f"Error getting ListenBrainz playlists: {e}")
-        return jsonify({"error": str(e)}), 500
 
-@app.route('/api/listenbrainz/state/<playlist_mbid>', methods=['GET'])
-def get_listenbrainz_playlist_state(playlist_mbid):
-    """Get specific ListenBrainz playlist state (detailed version)"""
-    try:
-        state_key = _lb_state_key(playlist_mbid)
-        if state_key not in listenbrainz_playlist_states:
-            return jsonify({"error": "ListenBrainz playlist not found"}), 404
 
-        state = listenbrainz_playlist_states[state_key]
-        state['last_accessed'] = time.time()
 
-        # Return full state information (including results for modal hydration)
-        response = {
-            'playlist_mbid': playlist_mbid,
-            'playlist': state['playlist'],
-            'phase': state['phase'],
-            'status': state['status'],
-            'discovery_progress': state['discovery_progress'],
-            'spotify_matches': state['spotify_matches'],
-            'spotify_total': state['spotify_total'],
-            'discovery_results': state['discovery_results'],
-            'sync_playlist_id': state.get('sync_playlist_id'),
-            'converted_spotify_playlist_id': state.get('converted_spotify_playlist_id'),
-            'download_process_id': state.get('download_process_id'),
-            'sync_progress': state.get('sync_progress', {}),
-            'created_at': state['created_at'],
-            'last_accessed': state['last_accessed']
-        }
-
-        return jsonify(response)
-
-    except Exception as e:
-        logger.error(f"Error getting ListenBrainz playlist state: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/listenbrainz/reset/<playlist_mbid>', methods=['POST'])
-def reset_listenbrainz_playlist(playlist_mbid):
-    """Reset ListenBrainz playlist to fresh phase (clear discovery/sync data)"""
-    try:
-        state_key = _lb_state_key(playlist_mbid)
-        if state_key not in listenbrainz_playlist_states:
-            return jsonify({"error": "ListenBrainz playlist not found"}), 404
-
-        state = listenbrainz_playlist_states[state_key]
-
-        # Stop any active discovery
-        if 'discovery_future' in state and state['discovery_future']:
-            state['discovery_future'].cancel()
-
-        # Reset state to fresh (preserve original playlist data)
-        state['phase'] = 'fresh'
-        state['status'] = 'cached'
-        state['discovery_results'] = []
-        state['discovery_progress'] = 0
-        state['spotify_matches'] = 0
-        state['sync_playlist_id'] = None
-        state['converted_spotify_playlist_id'] = None
-        state['sync_progress'] = {}
-        state['discovery_future'] = None
-        state['last_accessed'] = time.time()
-
-        logger.info(f"Reset ListenBrainz playlist to fresh: {state['playlist']['title']}")
-        return jsonify({"success": True, "phase": "fresh"})
-
-    except Exception as e:
-        logger.error(f"Error resetting ListenBrainz playlist: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/listenbrainz/remove/<playlist_mbid>', methods=['POST'])
-def remove_listenbrainz_playlist(playlist_mbid):
-    """Remove ListenBrainz playlist from state (doesn't affect cache)"""
-    try:
-        state_key = _lb_state_key(playlist_mbid)
-        if state_key not in listenbrainz_playlist_states:
-            return jsonify({"error": "ListenBrainz playlist not found"}), 404
-
-        state = listenbrainz_playlist_states[state_key]
-
-        # Stop any active discovery
-        if 'discovery_future' in state and state['discovery_future']:
-            state['discovery_future'].cancel()
-
-        # Remove from state
-        del listenbrainz_playlist_states[state_key]
-
-        logger.info(f"Removed ListenBrainz playlist from state: {playlist_mbid}")
-        return jsonify({"success": True})
-
-    except Exception as e:
-        logger.error(f"Error removing ListenBrainz playlist: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/listenbrainz/discovery/start/<playlist_mbid>', methods=['POST'])
-def start_listenbrainz_discovery(playlist_mbid):
-    """Initialize and start Spotify discovery process for a ListenBrainz playlist"""
-    try:
-        data = request.get_json()
-        playlist_data = data.get('playlist')
-
-        if not playlist_data:
-            return jsonify({"error": "Playlist data required"}), 400
-
-        # Create or update state
-        state_key = _lb_state_key(playlist_mbid)
-        if state_key not in listenbrainz_playlist_states:
-            # Initialize new state
-            listenbrainz_playlist_states[state_key] = {
-                'playlist_mbid': playlist_mbid,
-                'playlist': playlist_data,
-                'phase': 'discovering',
-                'status': 'discovering',
-                'discovery_progress': 0,
-                'spotify_matches': 0,
-                'spotify_total': len(playlist_data.get('tracks', [])),
-                'discovery_results': [],
-                'created_at': time.time(),
-                'last_accessed': time.time()
-            }
-            logger.info(f"Created new ListenBrainz playlist state: {playlist_data.get('name', 'Unknown')}")
-        else:
-            # State already exists, update it
-            state = listenbrainz_playlist_states[state_key]
-            if state['phase'] == 'discovering':
-                return jsonify({"error": "Discovery already in progress"}), 400
-
-            # Reset for new discovery
-            state['phase'] = 'discovering'
-            state['status'] = 'discovering'
-            state['discovery_progress'] = 0
-            state['spotify_matches'] = 0
-            state['discovery_results'] = []
-            state['last_accessed'] = time.time()
-
-        state = listenbrainz_playlist_states[state_key]
-
-        # Add activity for discovery start
-        playlist_name = playlist_data.get('name', 'Unknown Playlist')
-        track_count = len(playlist_data.get('tracks', []))
-        add_activity_item("", "ListenBrainz Discovery Started", f"'{playlist_name}' - {track_count} tracks", "Now")
-
-        # Start discovery worker (pass state_key for profile-scoped state access)
-        future = listenbrainz_discovery_executor.submit(_run_listenbrainz_discovery_worker, state_key)
-        state['discovery_future'] = future
-
-        logger.info(f"Started Spotify discovery for ListenBrainz playlist: {playlist_name}")
-        return jsonify({"success": True, "message": "Discovery started"})
-
-    except Exception as e:
-        logger.error(f"Error starting ListenBrainz discovery: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/listenbrainz/discovery/status/<playlist_mbid>', methods=['GET'])
-def get_listenbrainz_discovery_status(playlist_mbid):
-    """Get real-time discovery status for a ListenBrainz playlist"""
-    return _get_source_discovery_status(listenbrainz_playlist_states, _lb_state_key(playlist_mbid), "ListenBrainz playlist not found", "ListenBrainz")
-
-@app.route('/api/listenbrainz/update-phase/<playlist_mbid>', methods=['POST'])
-def update_listenbrainz_phase(playlist_mbid):
-    """Update ListenBrainz playlist phase (for phase transitions and persistence)"""
-    try:
-        state_key = _lb_state_key(playlist_mbid)
-        if state_key not in listenbrainz_playlist_states:
-            return jsonify({"error": "ListenBrainz playlist not found"}), 404
-
-        data = request.get_json() or {}
-        new_phase = data.get('phase')
-
-        if not new_phase:
-            return jsonify({"error": "Phase is required"}), 400
-
-        state = listenbrainz_playlist_states[state_key]
-        state['phase'] = new_phase
-        state['last_accessed'] = time.time()
-
-        # Update download process ID if provided (for download persistence)
-        if 'download_process_id' in data:
-            state['download_process_id'] = data['download_process_id']
-            logger.info(f"Updated ListenBrainz download_process_id: {data['download_process_id']}")
-
-        # Update converted Spotify playlist ID if provided (for download persistence)
-        if 'converted_spotify_playlist_id' in data:
-            state['converted_spotify_playlist_id'] = data['converted_spotify_playlist_id']
-            logger.info(f"Updated ListenBrainz converted_spotify_playlist_id: {data['converted_spotify_playlist_id']}")
-
-        logger.info(f"Updated ListenBrainz playlist {playlist_mbid} phase to: {new_phase}")
-
-        return jsonify({
-            "success": True,
-            "phase": new_phase
-        })
-
-    except Exception as e:
-        logger.error(f"Error updating ListenBrainz playlist phase: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/listenbrainz/discovery/update_match', methods=['POST'])
-def update_listenbrainz_discovery_match():
-    """Update a ListenBrainz discovery result with manually selected Spotify track"""
-    try:
-        data = request.get_json()
-        identifier = data.get('identifier')  # playlist_mbid
-        track_index = data.get('track_index')
-        spotify_track = data.get('spotify_track')
-
-        if not identifier or track_index is None or not spotify_track:
-            return jsonify({'error': 'Missing required fields'}), 400
-
-        # Get the state (identifier is playlist_mbid)
-        state = listenbrainz_playlist_states.get(_lb_state_key(identifier))
-
-        if not state:
-            return jsonify({'error': 'Discovery state not found'}), 404
-
-        # Update the discovery result
-        if track_index < len(state['discovery_results']):
-            result = state['discovery_results'][track_index]
-
-            # Was previously not found, now found
-            if result['status_class'] == 'not-found' and spotify_track:
-                state['spotify_matches'] += 1
-            # Was previously found, now not found
-            elif result['status_class'] == 'found' and not spotify_track:
-                state['spotify_matches'] -= 1
-
-            # Update result
-            result['status'] = 'Found' if spotify_track else 'Not Found'
-            result['status_class'] = 'found' if spotify_track else 'not-found'
-            result['spotify_track'] = spotify_track.get('name', '') if spotify_track else ''
-            # Join all artists (matching YouTube/Tidal/Beatport format)
-            artists = spotify_track.get('artists', []) if spotify_track else []
-            result['spotify_artist'] = _join_artist_names(artists) if isinstance(artists, list) else _extract_artist_name(artists)
-            # Album comes as a string from the frontend fix modal
-            album = spotify_track.get('album', '') if spotify_track else ''
-            result['spotify_album'] = album if isinstance(album, str) else album.get('name', '') if isinstance(album, dict) else ''
-            result['spotify_id'] = spotify_track.get('id', '') if spotify_track else ''
-
-            if spotify_track:
-                # Store spotify_data in the same format as other platforms.
-                # Manual match from the fix modal — build a rich spotify_data
-                # (album as dict with image info) matching the normal discovery
-                # shape, and explicitly clear any prior wing-it flag since the
-                # user picked a real metadata match.
-                result['spotify_data'] = _build_fix_modal_spotify_data(spotify_track)
-            else:
-                result['spotify_data'] = None
-
-            result['wing_it_fallback'] = False
-            result['manual_match'] = True
-
-            logger.info(f"Updated ListenBrainz match for track {track_index}: {result['status']}")
-            return jsonify({'success': True})
-        else:
-            return jsonify({'error': 'Invalid track index'}), 400
-
-    except Exception as e:
-        logger.error(f"Error updating ListenBrainz discovery match: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
 
 def convert_listenbrainz_results_to_spotify_tracks(discovery_results):
     """Convert ListenBrainz discovery results to Spotify tracks format for sync"""
@@ -35504,68 +33621,8 @@ def wing_it_sync():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/listenbrainz/sync/start/<playlist_mbid>', methods=['POST'])
-def start_listenbrainz_sync(playlist_mbid):
-    """Start sync process for a ListenBrainz playlist using discovered Spotify tracks"""
-    try:
-        state_key = _lb_state_key(playlist_mbid)
-        if state_key not in listenbrainz_playlist_states:
-            return jsonify({"error": "ListenBrainz playlist not found"}), 404
 
-        state = listenbrainz_playlist_states[state_key]
-        state['last_accessed'] = time.time()  # Update access time
 
-        if state['phase'] not in ['discovered', 'sync_complete', 'download_complete']:
-            return jsonify({"error": "ListenBrainz playlist not ready for sync"}), 400
-
-        # Convert discovery results to Spotify tracks format
-        spotify_tracks = convert_listenbrainz_results_to_spotify_tracks(state['discovery_results'])
-
-        if not spotify_tracks:
-            return jsonify({"error": "No Spotify matches found for sync"}), 400
-
-        # Create a temporary playlist ID for sync tracking
-        sync_playlist_id = f"listenbrainz_{playlist_mbid}"
-        playlist_name = state['playlist']['name']
-
-        # Add activity for sync start
-        add_activity_item("", "ListenBrainz Sync Started", f"'{playlist_name}' - {len(spotify_tracks)} tracks", "Now")
-
-        # Update ListenBrainz state
-        state['phase'] = 'syncing'
-        state['sync_playlist_id'] = sync_playlist_id
-        state['sync_progress'] = {}
-
-        # Start the sync using existing sync infrastructure
-        sync_data = {
-            'playlist_id': sync_playlist_id,
-            'playlist_name': playlist_name,
-            'tracks': spotify_tracks
-        }
-
-        with sync_lock:
-            sync_states[sync_playlist_id] = {"status": "starting", "progress": {}}
-
-        # Submit sync task
-        future = sync_executor.submit(_run_sync_task, sync_playlist_id, sync_data['playlist_name'], spotify_tracks, None, get_current_profile_id())
-        active_sync_workers[sync_playlist_id] = future
-
-        logger.info(f"Started ListenBrainz sync for: {playlist_name} ({len(spotify_tracks)} tracks)")
-        return jsonify({"success": True, "sync_playlist_id": sync_playlist_id})
-
-    except Exception as e:
-        logger.error(f"Error starting ListenBrainz sync: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/listenbrainz/sync/status/<playlist_mbid>', methods=['GET'])
-def get_listenbrainz_sync_status(playlist_mbid):
-    """Get sync status for a ListenBrainz playlist"""
-    return _get_source_sync_status(listenbrainz_playlist_states, _lb_state_key(playlist_mbid), "ListenBrainz playlist not found", "ListenBrainz", "ListenBrainz playlist", _pl_name_safe)
-
-@app.route('/api/listenbrainz/sync/cancel/<playlist_mbid>', methods=['POST'])
-def cancel_listenbrainz_sync(playlist_mbid):
-    """Cancel sync for a ListenBrainz playlist"""
-    return _cancel_source_sync(listenbrainz_playlist_states, _lb_state_key(playlist_mbid), "ListenBrainz", "ListenBrainz playlist not found")
 
 @app.route('/api/metadata/start', methods=['POST'])
 def start_metadata_update():
@@ -39225,14 +37282,10 @@ def start_oauth_callback_servers():
             import traceback
             logger.error(f"Full error: {traceback.format_exc()}")
     
-    # Start both servers in background threads
+    # Music Lite: only Spotify OAuth callback server remains active.
     spotify_thread = threading.Thread(target=run_spotify_server, daemon=True)
-    tidal_thread = threading.Thread(target=run_tidal_server, daemon=True)
-    
     spotify_thread.start()
-    tidal_thread.start()
-    
-    logger.info("OAuth callback servers started")
+    logger.info("Spotify OAuth callback server started")
 
 # ================================================================================================
 # MUSICBRAINZ ENRICHMENT - PHASE 5 WEB UI INTEGRATION
@@ -39296,52 +37349,9 @@ except Exception as e:
 # END AUDIODB INTEGRATION
 # ================================================================================================
 
-# --- Discogs Worker Initialization ---
-discogs_worker = None
-try:
-    from core.discogs_worker import DiscogsWorker
-    from database.music_database import MusicDatabase
-    discogs_db = MusicDatabase()
-    discogs_worker = DiscogsWorker(database=discogs_db)
-    discogs_worker.start()
-    if config_manager.get('discogs_enrichment_paused', False):
-        discogs_worker.pause()
-        logger.info("Discogs enrichment worker initialized (paused — restored from config)")
-    else:
-        logger.info("Discogs enrichment worker initialized and started")
-except Exception as e:
-    logger.error(f"Discogs worker initialization failed: {e}")
-    discogs_worker = None
+discogs_worker = None  # Music Lite: removed provider
 
-# Discogs status / pause / resume routes are now served by the
-# generic enrichment blueprint at /api/enrichment/discogs/{status,pause,resume}.
-
-# ================================================================================================
-# DEEZER ENRICHMENT INTEGRATION
-# ================================================================================================
-
-# --- Deezer Worker Initialization ---
-deezer_worker = None
-try:
-    from database.music_database import MusicDatabase
-    deezer_db = MusicDatabase()
-    deezer_worker = DeezerWorker(database=deezer_db)
-    deezer_worker.start()
-    if config_manager.get('deezer_enrichment_paused', False):
-        deezer_worker.pause()
-        logger.info("Deezer enrichment worker initialized (paused — restored from config)")
-    else:
-        logger.info("Deezer enrichment worker initialized and started")
-except Exception as e:
-    logger.error(f"Deezer worker initialization failed: {e}")
-    deezer_worker = None
-
-# Deezer status / pause / resume routes are now served by the
-# generic enrichment blueprint at /api/enrichment/deezer/{status,pause,resume}.
-
-# ================================================================================================
-# END DEEZER INTEGRATION
-# ================================================================================================
+deezer_worker = None  # Music Lite: removed provider
 
 # ================================================================================================
 # JIOSAAVN ENRICHMENT INTEGRATION
@@ -39658,50 +37668,9 @@ except Exception as e:
 # END BANDCAMP ENRICHMENT INTEGRATION
 # ================================================================================================
 
-# ================================================================================================
-# TIDAL ENRICHMENT WORKER
-# ================================================================================================
+tidal_enrichment_worker = None  # Music Lite: removed provider
 
-tidal_enrichment_worker = None
-try:
-    from database.music_database import MusicDatabase
-    tidal_enrich_db = MusicDatabase()
-    tidal_enrichment_worker = TidalWorker(database=tidal_enrich_db, client=tidal_client)
-    tidal_enrichment_worker.start()
-    if config_manager.get('tidal_enrichment_paused', False):
-        tidal_enrichment_worker.pause()
-        logger.info("Tidal enrichment worker initialized (paused — restored from config)")
-    else:
-        logger.info("Tidal enrichment worker initialized and started")
-except Exception as e:
-    logger.error(f"Tidal worker initialization failed: {e}")
-    tidal_enrichment_worker = None
-
-# Tidal status / pause / resume routes are now served by the
-# generic enrichment blueprint at /api/enrichment/tidal/{status,pause,resume}.
-# The 'authenticated': False fallback field is encoded on the
-# EnrichmentService descriptor (see core/enrichment/services.py).
-
-# ================================================================================================
-# QOBUZ ENRICHMENT WORKER
-# ================================================================================================
-
-qobuz_enrichment_worker = None
-try:
-    from database.music_database import MusicDatabase
-    from core.qobuz_client import QobuzClient
-    qobuz_enrich_db = MusicDatabase()
-    qobuz_enrich_client = QobuzClient()  # Separate client instance for thread safety
-    qobuz_enrichment_worker = QobuzWorker(database=qobuz_enrich_db, client=qobuz_enrich_client)
-    qobuz_enrichment_worker.start()
-    if config_manager.get('qobuz_enrichment_paused', False):
-        qobuz_enrichment_worker.pause()
-        logger.info("Qobuz enrichment worker initialized (paused — restored from config)")
-    else:
-        logger.info("Qobuz enrichment worker initialized and started")
-except Exception as e:
-    logger.error(f"Qobuz worker initialization failed: {e}")
-    qobuz_enrichment_worker = None
+qobuz_enrichment_worker = None  # Music Lite: removed provider
 
 _init_service_search(
     spotify_worker=spotify_enrichment_worker,
@@ -39852,7 +37821,6 @@ _init_debug_info(
     log_dir=_log_dir,
     flask_app=app,
     get_database_fn=get_database,
-    tidal_client_getter=lambda: tidal_client,
 )
 metadata_registry.register_profile_spotify_credentials_provider(
     lambda profile_id: get_database().get_profile_spotify(profile_id)
@@ -41628,17 +39596,7 @@ _register_enrichment_services([
         worker_getter=lambda: audiodb_worker,
         config_paused_key='audiodb_enrichment_paused',
     ),
-    _EnrichmentService(
-        id='discogs', display_name='Discogs',
-        worker_getter=lambda: discogs_worker,
-        config_paused_key='discogs_enrichment_paused',
-    ),
-    _EnrichmentService(
-        id='deezer', display_name='Deezer',
-        worker_getter=lambda: deezer_worker,
-        config_paused_key='deezer_enrichment_paused',
-    ),
-    _EnrichmentService(
+            _EnrichmentService(
         id='spotify', display_name='Spotify',
         worker_getter=lambda: spotify_enrichment_worker,
         config_paused_key='spotify_enrichment_paused',
@@ -41662,19 +39620,7 @@ _register_enrichment_services([
         config_paused_key='genius_enrichment_paused',
         auto_pause_token='genius-enrichment',
     ),
-    _EnrichmentService(
-        id='tidal', display_name='Tidal',
-        worker_getter=lambda: tidal_enrichment_worker,
-        config_paused_key='tidal_enrichment_paused',
-        extra_status_defaults={'authenticated': False},
-    ),
-    _EnrichmentService(
-        id='qobuz', display_name='Qobuz',
-        worker_getter=lambda: qobuz_enrichment_worker,
-        config_paused_key='qobuz_enrichment_paused',
-        extra_status_defaults={'authenticated': False},
-    ),
-    _EnrichmentService(
+            _EnrichmentService(
         id='amazon', display_name='Amazon Music',
         worker_getter=lambda: amazon_worker,
         config_paused_key='amazon_enrichment_paused',

@@ -13,41 +13,29 @@ from __future__ import annotations
 from typing import Any, Callable, Optional
 
 from core.playlists.sources.base import (
-    SOURCE_DEEZER,
     SOURCE_ITUNES_LINK,
     SOURCE_LASTFM,
-    SOURCE_LISTENBRAINZ,
-    SOURCE_QOBUZ,
     SOURCE_SOULSYNC_DISCOVERY,
     SOURCE_SPOTIFY,
     SOURCE_SPOTIFY_PUBLIC,
-    SOURCE_TIDAL,
     SOURCE_YOUTUBE,
 )
-from core.playlists.sources.deezer import DeezerPlaylistSource
 from core.playlists.sources.itunes_link import ITunesLinkPlaylistSource
 from core.playlists.sources.lastfm import LastFMPlaylistSource
-from core.playlists.sources.listenbrainz import ListenBrainzPlaylistSource
-from core.playlists.sources.qobuz import QobuzPlaylistSource
 from core.playlists.sources.registry import PlaylistSourceRegistry
 from core.playlists.sources.soulsync_discovery import (
     SoulSyncDiscoveryPlaylistSource,
 )
 from core.playlists.sources.spotify import SpotifyPlaylistSource
 from core.playlists.sources.spotify_public import SpotifyPublicPlaylistSource
-from core.playlists.sources.tidal import TidalPlaylistSource
 from core.playlists.sources.youtube import YouTubePlaylistSource
 
 
 def build_playlist_source_registry(
     *,
     spotify_client_getter: Callable[[], Any],
-    tidal_client_getter: Callable[[], Any],
-    qobuz_client_getter: Callable[[], Any],
-    deezer_client_getter: Callable[[], Any],
     itunes_link_parser: Optional[Callable[[str], Optional[dict]]] = None,
     youtube_parser: Optional[Callable[[str], Optional[dict]]] = None,
-    listenbrainz_manager_getter: Optional[Callable[[], Any]] = None,
     lastfm_manager_getter: Optional[Callable[[], Any]] = None,
     personalized_manager_getter: Optional[Callable[[], Any]] = None,
     profile_id_getter: Optional[Callable[[], int]] = None,
@@ -64,9 +52,6 @@ def build_playlist_source_registry(
 
     reg.register(SOURCE_SPOTIFY, lambda: SpotifyPlaylistSource(spotify_client_getter))
     reg.register(SOURCE_SPOTIFY_PUBLIC, lambda: SpotifyPublicPlaylistSource())
-    reg.register(SOURCE_DEEZER, lambda: DeezerPlaylistSource(deezer_client_getter))
-    reg.register(SOURCE_TIDAL, lambda: TidalPlaylistSource(tidal_client_getter))
-    reg.register(SOURCE_QOBUZ, lambda: QobuzPlaylistSource(qobuz_client_getter))
 
     _no_url_parser = lambda url: None
     reg.register(
@@ -79,13 +64,6 @@ def build_playlist_source_registry(
     )
 
     _no_manager = lambda: None
-    reg.register(
-        SOURCE_LISTENBRAINZ,
-        lambda: ListenBrainzPlaylistSource(
-            listenbrainz_manager_getter or _no_manager,
-            discover_callable=discover_callable,
-        ),
-    )
     reg.register(
         SOURCE_LASTFM,
         lambda: LastFMPlaylistSource(

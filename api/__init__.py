@@ -40,7 +40,6 @@ def create_api_blueprint():
     from .discover import register_routes as reg_discover
     from .profiles import register_routes as reg_profiles
     from .retag import register_routes as reg_retag
-    from .listenbrainz import register_routes as reg_listenbrainz
     from .cache import register_routes as reg_cache
     from .request import register_routes as reg_request
     from .request import start_cleanup_thread as _start_request_cleanup
@@ -59,7 +58,6 @@ def create_api_blueprint():
     reg_discover(bp)
     reg_profiles(bp)
     reg_retag(bp)
-    reg_listenbrainz(bp)
     reg_cache(bp)
     reg_request(bp)
 

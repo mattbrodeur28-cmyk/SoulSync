@@ -253,7 +253,7 @@ def register_routes(bp):
 
         Query params:
             type: 'artist', 'album', or 'track' (required)
-            provider: 'spotify', 'musicbrainz', 'itunes', 'deezer', 'audiodb', 'tidal', 'qobuz', 'genius' (required)
+            provider: 'spotify', 'musicbrainz', 'itunes', 'audiodb', 'genius' (required)
             id: the external ID value (required)
         """
         entity_type = request.args.get("type")
@@ -270,7 +270,7 @@ def register_routes(bp):
             return api_error("BAD_REQUEST", "type must be 'artist', 'album', or 'track'.", 400)
 
         # genius only exists on artists and tracks, not albums
-        valid_providers = ("spotify", "musicbrainz", "itunes", "deezer", "audiodb", "tidal", "qobuz", "genius")
+        valid_providers = ("spotify", "musicbrainz", "itunes", "audiodb", "genius")
         if provider not in valid_providers:
             return api_error("BAD_REQUEST", f"provider must be one of: {', '.join(valid_providers)}.", 400)
         if provider == "genius" and entity_type == "album":

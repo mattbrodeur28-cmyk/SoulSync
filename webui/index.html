@@ -87,6 +87,20 @@
         } catch (e) { /* no localStorage → default (show) */ }
     </script>
     {{ vite_assets('head')|safe }}
+
+    <style id="music-lite-removed-provider-settings">
+        [data-service="deezer"],
+        [data-service="discogs"],
+        [data-service="tidal"],
+        [data-service="qobuz"],
+        [data-service="listenbrainz"],
+        #tidal-download-settings-container,
+        #qobuz-settings-container,
+        #deezer-download-settings-container {
+            display: none !important;
+        }
+    </style>
+
 </head>
 
 <body data-side="music" class="{% if initial_reduce_effects %}reduce-effects {% endif %}{% if initial_max_performance %}max-performance{% endif %}">
@@ -2296,8 +2310,6 @@
                                             <option value="spotify">Spotify</option>
                                             <option value="spotify_free">Spotify (no auth)</option>
                                             <option value="itunes">iTunes / Apple Music</option>
-                                            <option value="deezer">Deezer</option>
-                                            <option value="discogs">Discogs</option>
                                             <option value="musicbrainz">MusicBrainz</option>
                                         </select>
                                         <span class="info-icon" role="button" tabindex="0" title="What's this?"
@@ -2727,9 +2739,8 @@
                                 <div class="api-test-buttons">
                                     <button class="test-button" onclick="testConnection('spotify')">Test
                                         Spotify</button>
-                                    <button class="test-button" onclick="testConnection('tidal')">Test Tidal</button>
-                                    <button class="test-button" onclick="testConnection('listenbrainz')">Test
-                                        ListenBrainz</button>
+
+
                                     <button class="test-button" onclick="testConnection('acoustid')">Test
                                         AcoustID</button>
                                     <button class="test-button" onclick="testConnection('lastfm')">Test
@@ -3696,10 +3707,7 @@
                                         onchange="updateDownloadSourceUI()">
                                         <option value="soulseek">Soulseek Only</option>
                                         <option value="youtube">YouTube Only</option>
-                                        <option value="tidal">Tidal Only</option>
-                                        <option value="qobuz">Qobuz Only</option>
                                         <option value="hifi">HiFi Only (Free Lossless)</option>
-                                        <option value="deezer_dl">Deezer Only</option>
                                         <option value="amazon">Amazon Music Only</option>
                                         <option value="lidarr">Lidarr Only</option>
                                         <option value="soundcloud">SoundCloud Only</option>
@@ -3776,8 +3784,8 @@
                                         <!-- Populated by JS -->
                                     </div>
                                     <!-- Hidden selects for backward compatibility with saveSettings -->
-                                    <select id="hybrid-primary-source" style="display:none;"><option value="soulseek">Soulseek</option><option value="youtube">YouTube</option><option value="tidal">Tidal</option><option value="qobuz">Qobuz</option><option value="hifi">HiFi</option><option value="deezer_dl">Deezer</option><option value="soundcloud">SoundCloud</option></select>
-                                    <select id="hybrid-secondary-source" style="display:none;"><option value="soulseek">Soulseek</option><option value="youtube">YouTube</option><option value="tidal">Tidal</option><option value="qobuz">Qobuz</option><option value="hifi">HiFi</option><option value="deezer_dl">Deezer</option><option value="soundcloud">SoundCloud</option></select>
+                                    <select id="hybrid-primary-source" style="display:none;"><option value="soulseek">Soulseek</option><option value="youtube">YouTube</option><option value="hifi">HiFi</option><option value="soundcloud">SoundCloud</option></select>
+                                    <select id="hybrid-secondary-source" style="display:none;"><option value="soulseek">Soulseek</option><option value="youtube">YouTube</option><option value="hifi">HiFi</option><option value="soundcloud">SoundCloud</option></select>
                                 </div>
                                 </div><!-- end basic source subcard -->
 
@@ -6821,10 +6829,8 @@
                     <option value="">All Sources</option>
                     <option value="spotify">Spotify</option>
                     <option value="itunes">iTunes</option>
-                    <option value="deezer">Deezer</option>
                     <option value="beatport">Beatport</option>
                     <option value="musicbrainz">MusicBrainz</option>
-                    <option value="discogs">Discogs</option>
                 </select>
                 <select class="mcache-sort-filter" id="mcache-sort-filter" onchange="loadMetadataCacheBrowse()">
                     <option value="last_accessed_at">Recently Accessed</option>
