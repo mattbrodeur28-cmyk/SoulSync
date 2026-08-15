@@ -1,0 +1,57 @@
+name: Build SoulSync Music Lite
+
+on:
+  push:
+    branches:
+      - feature/music-lite
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Verify Python syntax
+        run: python3 -m py_compile web_server.py
+
+      - name: Verify JavaScript syntax
+        run: node --check webui/static/init.js
+
+      - name: Set lowercase owner
+        run: echo "OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push SoulSync Music Lite
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          pull: true
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            COMMIT_SHA=${{ github.sha }}
+          tags: |
+            ghcr.io/${{ env.OWNER }}/soulsync-music-lite:latest
+            ghcr.io/${{ env.OWNER }}/soulsync-music-lite:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
