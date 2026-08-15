@@ -22,6 +22,11 @@ jobs:
       - name: Verify Python syntax
         run: python3 -m py_compile web_server.py
 
+      - name: Catch undefined Python names
+        run: |
+          python3 -m pip install --quiet ruff==0.15.12
+          python3 -m ruff check web_server.py --select F821
+
       - name: Verify JavaScript syntax
         run: node --check webui/static/init.js
 
@@ -38,11 +43,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push SoulSync Music Lite
+      - name: Build SoulSync Music Lite locally
         uses: docker/build-push-action@v7
         with:
           context: .
-          push: true
+          push: false
+          load: true
           pull: true
           platforms: linux/amd64
           cache-from: type=gha
@@ -55,3 +61,16 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Smoke test web server import inside image
+        run: |
+          docker run --rm \
+            --entrypoint /opt/venv/bin/python \
+            -e SOULSYNC_CONFIG_PATH=/app/config/config.example.json \
+            ghcr.io/${{ env.OWNER }}/soulsync-music-lite:${{ github.sha }} \
+            -c "import os; import web_server; print('WEB_SERVER_IMPORT_OK', flush=True); os._exit(0)"
+
+      - name: Push tested SoulSync Music Lite image
+        run: |
+          docker push ghcr.io/${{ env.OWNER }}/soulsync-music-lite:${{ github.sha }}
+          docker push ghcr.io/${{ env.OWNER }}/soulsync-music-lite:latest

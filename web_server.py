@@ -23939,71 +23939,7 @@ def get_discover_album(source, album_id):
             except (TypeError, ValueError):
                 return jsonify({"error": "Invalid Discogs release id"}), 400
 
-            release = DiscogsClient().get_release(rel_id)
-            if not release:
-                return jsonify({"error": "Discogs release not found"}), 404
-
-            import re as _re
-            _disambig_re = _re.compile(r'\s*\(\d+\)$')
-            artists_raw = release.get('artists') or []
-            artist_names = []
-            for a in artists_raw:
-                name = (a.get('name') or '').strip() if isinstance(a, dict) else str(a)
-                # Strip Discogs disambiguation suffix "(N)"
-                name = _disambig_re.sub('', name)
-                if name:
-                    artist_names.append({'name': name})
-
-            tracks_out = []
-            for idx, t in enumerate(release.get('tracklist', []) or [], start=1):
-                if not isinstance(t, dict):
-                    continue
-                title = (t.get('title') or '').strip()
-                if not title:
-                    continue
-                # Discogs duration: "3:45" or "1:23:45". Convert to ms.
-                dur_ms = 0
-                dur_str = (t.get('duration') or '').strip()
-                if dur_str:
-                    try:
-                        parts = [int(p) for p in dur_str.split(':')]
-                        if len(parts) == 2:
-                            dur_ms = (parts[0] * 60 + parts[1]) * 1000
-                        elif len(parts) == 3:
-                            dur_ms = (parts[0] * 3600 + parts[1] * 60 + parts[2]) * 1000
-                    except (ValueError, TypeError):
-                        dur_ms = 0
-                tracks_out.append({
-                    'id': f"discogs_{rel_id}_{idx}",
-                    'name': title,
-                    'track_number': idx,
-                    'duration_ms': dur_ms,
-                    'artists': artist_names,
-                })
-
-            images = release.get('images') or []
-            cover_url = ''
-            if images and isinstance(images[0], dict):
-                cover_url = images[0].get('uri') or images[0].get('uri150') or ''
-
-            year = release.get('year')
-            release_date = str(year) if year and int(year) > 0 else ''
-
-            return jsonify({
-                'id': str(rel_id),
-                'name': release.get('title', ''),
-                'artists': artist_names,
-                'release_date': release_date,
-                'total_tracks': len(tracks_out),
-                'album_type': 'album',
-                'images': [{'url': cover_url}] if cover_url else [],
-                'tracks': tracks_out,
-                'source': 'discogs',
-            })
-
-        else:
-            return jsonify({"error": f"Unknown source: {source}"}), 400
-
+            return jsonify({"error": "Discogs is not available in SoulSync Music Lite"}), 410
     except Exception as e:
         logger.error(f"Error fetching discover album: {e}")
         return jsonify({"error": str(e)}), 500
@@ -24540,7 +24476,6 @@ from core.discovery.scoring import (
 
 
 # Tidal discovery worker logic lives in core/discovery/tidal.py.
-from core.discovery import tidal as _discovery_tidal
 # Source-agnostic discovery route helpers (lifted from the per-source copies).
 from core.discovery.endpoints import (
     convert_results_to_spotify_tracks,
@@ -24705,26 +24640,13 @@ def _save_source_bubble_snapshot(payload_key, no_data_error, snapshot_kind,
 
 
 def _build_tidal_discovery_deps():
-    """Build the TidalDiscoveryDeps bundle from web_server.py globals on each call."""
-    return _discovery_tidal.TidalDiscoveryDeps(
-        tidal_discovery_states=tidal_discovery_states,
-        spotify_client=spotify_client,
-        pause_enrichment_workers=_pause_enrichment_workers,
-        resume_enrichment_workers=_resume_enrichment_workers,
-        get_active_discovery_source=_get_active_discovery_source,
-        get_metadata_fallback_client=_get_metadata_fallback_client,
-        get_discovery_cache_key=_get_discovery_cache_key,
-        get_database=get_database,
-        validate_discovery_cache_artist=_validate_discovery_cache_artist,
-        search_spotify_for_tidal_track=_search_spotify_for_tidal_track,
-        build_discovery_wing_it_stub=_build_discovery_wing_it_stub,
-        add_activity_item=add_activity_item,
-        sync_discovery_results_to_mirrored=_sync_discovery_results_to_mirrored,
-    )
+    # Music Lite: tidal discovery provider removed.
+    return None
 
 
 def _run_tidal_discovery_worker(playlist_id):
-    return _discovery_tidal.run_tidal_discovery_worker(playlist_id, _build_tidal_discovery_deps())
+    # Music Lite: tidal discovery provider removed.
+    return None
 
 
 
@@ -24819,30 +24741,16 @@ def _get_metadata_fallback_client():
 
 
 # Deezer discovery worker logic lives in core/discovery/deezer.py.
-from core.discovery import deezer as _discovery_deezer
 
 
 def _build_deezer_discovery_deps():
-    """Build the DeezerDiscoveryDeps bundle from web_server.py globals on each call."""
-    return _discovery_deezer.DeezerDiscoveryDeps(
-        deezer_discovery_states=deezer_discovery_states,
-        spotify_client=spotify_client,
-        pause_enrichment_workers=_pause_enrichment_workers,
-        resume_enrichment_workers=_resume_enrichment_workers,
-        get_active_discovery_source=_get_active_discovery_source,
-        get_metadata_fallback_client=_get_metadata_fallback_client,
-        get_discovery_cache_key=_get_discovery_cache_key,
-        get_database=get_database,
-        validate_discovery_cache_artist=_validate_discovery_cache_artist,
-        search_spotify_for_tidal_track=_search_spotify_for_tidal_track,
-        build_discovery_wing_it_stub=_build_discovery_wing_it_stub,
-        add_activity_item=add_activity_item,
-        sync_discovery_results_to_mirrored=_sync_discovery_results_to_mirrored,
-    )
+    # Music Lite: deezer discovery provider removed.
+    return None
 
 
 def _run_deezer_discovery_worker(playlist_id):
-    return _discovery_deezer.run_deezer_discovery_worker(playlist_id, _build_deezer_discovery_deps())
+    # Music Lite: deezer discovery provider removed.
+    return None
 
 
 
@@ -24911,30 +24819,16 @@ def _get_qobuz_client_for_sync():
 
 
 # Qobuz discovery worker logic lives in core/discovery/qobuz.py.
-from core.discovery import qobuz as _discovery_qobuz
 
 
 def _build_qobuz_discovery_deps():
-    """Build the QobuzDiscoveryDeps bundle from web_server.py globals on each call."""
-    return _discovery_qobuz.QobuzDiscoveryDeps(
-        qobuz_discovery_states=qobuz_discovery_states,
-        spotify_client=spotify_client,
-        pause_enrichment_workers=_pause_enrichment_workers,
-        resume_enrichment_workers=_resume_enrichment_workers,
-        get_active_discovery_source=_get_active_discovery_source,
-        get_metadata_fallback_client=_get_metadata_fallback_client,
-        get_discovery_cache_key=_get_discovery_cache_key,
-        get_database=get_database,
-        validate_discovery_cache_artist=_validate_discovery_cache_artist,
-        search_spotify_for_tidal_track=_search_spotify_for_tidal_track,
-        build_discovery_wing_it_stub=_build_discovery_wing_it_stub,
-        add_activity_item=add_activity_item,
-        sync_discovery_results_to_mirrored=_sync_discovery_results_to_mirrored,
-    )
+    # Music Lite: qobuz discovery provider removed.
+    return None
 
 
 def _run_qobuz_discovery_worker(playlist_id):
-    return _discovery_qobuz.run_qobuz_discovery_worker(playlist_id, _build_qobuz_discovery_deps())
+    # Music Lite: qobuz discovery provider removed.
+    return None
 
 
 def convert_qobuz_results_to_spotify_tracks(discovery_results):
@@ -26298,7 +26192,6 @@ def _run_youtube_discovery_worker(url_hash):
 
 
 # ListenBrainz discovery worker logic lives in core/discovery/listenbrainz.py.
-from core.discovery import listenbrainz as _discovery_listenbrainz
 
 
 
@@ -27849,7 +27742,7 @@ def get_my_connections():
         pid = get_current_profile_id()
         sp_connected, sp_account = _profile_spotify_connection(pid)
         td_connected, td_account = _profile_tidal_connection(pid)
-        lb_connected, lb_account = _profile_listenbrainz_connection(pid)
+        lb_connected, lb_account = False, None  # Music Lite: ListenBrainz removed
         return jsonify({
             'success': True,
             'is_admin': pid == 1,
@@ -27890,7 +27783,6 @@ def _disconnect_profile_tidal(pid):
 _PROFILE_DISCONNECTORS = {
     'spotify': _disconnect_profile_spotify,
     'tidal': _disconnect_profile_tidal,
-    'listenbrainz': _disconnect_profile_listenbrainz,
 }
 
 
@@ -32646,7 +32538,7 @@ def _fetch_liked_albums(profile_id: int):
             logger.info("[Your Albums] Discogs skipped (no token configured)")
         else:
             raise RuntimeError("Discogs is not available in Music Lite")
-            discogs_cl = DiscogsClient()
+            discogs_cl = None  # Music Lite: Discogs provider removed
             if discogs_cl.is_authenticated():
                 logger.info("[Your Albums] Fetching collection from Discogs...")
                 releases = discogs_cl.get_user_collection()
@@ -32658,7 +32550,7 @@ def _fetch_liked_albums(profile_id: int):
                         # Collection items are always releases — store the ID tagged
                         # ('r<id>') to match search/discography (#848), so every stored
                         # Discogs album ID is uniform and re-fetches route correctly.
-                        source_id=_tag_discogs_album_id(r['release_id'], 'release'), source_id_type='discogs',
+                        source_id=str(r['release_id']), source_id_type='discogs',
                         image_url=r.get('image_url'), release_date=r.get('release_date', ''),
                         total_tracks=r.get('total_tracks', 0), profile_id=profile_id
                     )
@@ -33131,44 +33023,7 @@ def get_discover_genre_playlist(genre_name):
 
 
 def _get_lb_discover_playlists(playlist_type):
-    """Shared logic for the 3 LB discover endpoints"""
-    lb_manager, username, source = _get_profile_lb_manager()
-
-    # Check if cache is empty - if so, populate it on first load
-    if not lb_manager.has_cached_playlists():
-        if not lb_manager.client.is_authenticated():
-            return jsonify({
-                "success": False,
-                "error": "Not authenticated",
-                "playlists": [],
-                "count": 0,
-                "username": None
-            })
-        logger.warning(f"Cache empty for profile {lb_manager.profile_id}, populating ListenBrainz playlists...")
-        lb_manager.update_all_playlists()
-
-    playlists = lb_manager.get_cached_playlists(playlist_type)
-
-    formatted_playlists = []
-    for playlist in playlists:
-        formatted_playlists.append({
-            "playlist": {
-                "identifier": f"https://listenbrainz.org/playlist/{playlist['playlist_mbid']}",
-                "title": playlist['title'],
-                "creator": playlist['creator'],
-                "track_count": playlist.get('track_count', 0),
-                "annotation": playlist.get('annotation', {}),
-                "track": []
-            }
-        })
-
-    return jsonify({
-        "success": True,
-        "playlists": formatted_playlists,
-        "count": len(formatted_playlists),
-        "username": username,
-        "source": source
-    })
+    return jsonify({"success": False, "error": "ListenBrainz is not available in SoulSync Music Lite"}), 410
 
 
 
