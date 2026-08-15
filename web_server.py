@@ -37821,6 +37821,9 @@ _init_debug_info(
     log_dir=_log_dir,
     flask_app=app,
     get_database_fn=get_database,
+    # Music Lite: debug-info keeps its legacy interface for now, but the
+    # removed Tidal provider is represented by an inert getter.
+    tidal_client_getter=lambda: None,
 )
 metadata_registry.register_profile_spotify_credentials_provider(
     lambda profile_id: get_database().get_profile_spotify(profile_id)
