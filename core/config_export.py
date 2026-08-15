@@ -43,11 +43,16 @@ def build_bundle(config_manager, video_db, *, include_secrets: bool,
     dict when ``include_secrets`` else the redacted one."""
     music = (config_manager.get_full_config() if include_secrets
              else config_manager.redacted_config())
-    try:
-        video = video_db.all_video_settings(exclude=_VIDEO_EXCLUDE)
-    except Exception:   # noqa: BLE001 - a video-side hiccup shouldn't sink a music export
-        logger.exception("config export: video settings dump failed")
+    if video_db is None:
+        # Music Lite: retain the legacy bundle shape for compatibility, but
+        # do not initialize or read the removed Video database.
         video = {}
+    else:
+        try:
+            video = video_db.all_video_settings(exclude=_VIDEO_EXCLUDE)
+        except Exception:   # noqa: BLE001 - a video-side hiccup shouldn't sink a music export
+            logger.exception("config export: video settings dump failed")
+            video = {}
     return {
         BUNDLE_MARKER: True,
         "bundle_version": BUNDLE_VERSION,
@@ -82,7 +87,12 @@ def apply_bundle(config_manager, video_db, data: Dict[str, Any]) -> Dict[str, An
     if not ok:
         raise ValueError(reason)
     music_keys = config_manager.apply_config_dict(data.get("music") or {})
-    video_keys = video_db.replace_video_settings(data.get("video") or {})
+    if video_db is None:
+        # Music Lite: accept old full SoulSync bundles, apply only the Music
+        # section, and intentionally ignore any Video settings they contain.
+        video_keys = 0
+    else:
+        video_keys = video_db.replace_video_settings(data.get("video") or {})
     return {"music_keys": music_keys, "video_keys": video_keys}
 
 

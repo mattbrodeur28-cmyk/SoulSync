@@ -494,26 +494,7 @@ socketio = SocketIO(app, async_mode='threading', cors_allowed_origins=_socketio_
 _log_socketio_startup_status(_socketio_cors_origins, logger)
 _socketio_rejection_logger = _SocketIORejectionLogger(logger)
 set_activity_toast_emitter(socketio.emit)
-# Live overlay-apply progress → 'overlay:progress' socket events (bell + panel).
-from core.video.overlays.service import set_overlay_progress_emitter as _set_overlay_emit
-_set_overlay_emit(socketio.emit)
-# Live collection-cleanup progress → 'collections:cleanup' socket events (studio).
-from core.video.collections.server_cleanup import set_cleanup_progress_emitter as _set_cleanup_emit
-_set_cleanup_emit(socketio.emit)
-# Live collection-sync progress → 'collections:sync' socket events (bell + studio).
-from core.video.collections.sync_job import set_sync_progress_emitter as _set_colsync_emit
-_set_colsync_emit(socketio.emit)
-# Live artwork-refresh progress → 'collections:artwork' socket events (bell + studio).
-from core.video.collections.poster_gen import set_artwork_progress_emitter as _set_colart_emit
-_set_colart_emit(socketio.emit)
-# Live bulk-metadata progress → 'video:bulk' socket events (bell + library bar).
-from core.video.bulk_ops import set_bulk_progress_emitter as _set_bulk_emit
-_set_bulk_emit(socketio.emit)
-# Video Library Maintenance (jobs & findings): live 'video:repair:progress'
-# socket events + the scheduler thread (force-runs work even when disabled).
-from core.video.repair.worker import get_video_repair_worker as _get_video_repair
-_get_video_repair().set_emitter(socketio.emit)
-_get_video_repair().start()
+# Music Lite: Video runtime emitters and repair scheduler removed.
 
 # Plex PIN auth requests stored in memory for polling
 _plex_pin_requests = {}
@@ -1482,27 +1463,7 @@ def _register_automation_handlers():
     )
     _register_extracted_handlers(_automation_deps)
 
-    # Bridge the isolated video download monitor's batch-complete signal into the
-    # automation engine (core/video can't import the engine). Mirrors how the music
-    # web_scan_manager forwards library_scan_completed. ONE forwarder relays EVERY
-    # published video event (batch complete, download completed/failed, repair
-    # findings, wishlist/watchlist changes, ...) to its same-named event trigger.
-    if automation_engine is not None:
-        try:
-            from core.video.download_events import register_event_forwarder
-            register_event_forwarder(
-                lambda etype, data: automation_engine.emit(etype, data or {}))
-        except Exception:
-            logger.exception("Could not wire video events -> automation engine")
-    # Notifications (arr-parity P11): a second forwarder fans the same events
-    # out to configured Discord/webhook/Telegram connections. Independent of
-    # the engine — notify still works if automations are off.
-    try:
-        from core.video.download_events import register_event_forwarder as _reg_fw
-        from core.video.notifications import handle_event as _notify_handle
-        _reg_fw(_notify_handle)
-    except Exception:
-        logger.exception("Could not wire video events -> notifications")
+    # Music Lite: Video event forwarders removed.
 
     logger.info("Automation action handlers registered")
 
@@ -4509,7 +4470,6 @@ def export_config_bundle():
         return jsonify({"error": "Config manager unavailable"}), 500
     from datetime import datetime, timezone
 
-    from api.video import get_video_db
     from core.config_export import build_bundle
     include_secrets = request.args.get('secrets', '0') in ('1', 'true', 'yes')
     # Plaintext-credential export is the ONLY endpoint that leaks real secrets,
@@ -4524,7 +4484,7 @@ def export_config_bundle():
                      "without credentials (they'll be re-entered on the new install).",
         }), 403
     bundle = build_bundle(
-        config_manager, get_video_db(),
+        config_manager, None,
         include_secrets=include_secrets,
         exported_at=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
         app_version=SOULSYNC_VERSION.split('+')[0],
@@ -4540,11 +4500,10 @@ def import_config_bundle():
     credentials (the config_manager's per-leaf guard skips the mask)."""
     if not config_manager:
         return jsonify({"error": "Config manager unavailable"}), 500
-    from api.video import get_video_db
     from core.config_export import apply_bundle
     data = request.get_json(silent=True)
     try:
-        summary = apply_bundle(config_manager, get_video_db(), data or {})
+        summary = apply_bundle(config_manager, None, data or {})
     except ValueError as e:
         return jsonify({"success": False, "error": str(e)}), 400
     except Exception as e:   # noqa: BLE001
@@ -41756,19 +41715,7 @@ _configure_labels_api(db_getter=get_database, itunes_getter=_get_itunes_client,
                       deezer_getter=_get_deezer_client)
 app.register_blueprint(_create_labels_blueprint())
 
-# Video side API (isolated: reads database/video_library.db only, never music)
-from api.video import create_video_blueprint as _create_video_blueprint
-app.register_blueprint(_create_video_blueprint(), url_prefix='/api/video')
-
-# Resume video downloads at boot: without this the monitor only starts on a grab or
-# when the Downloads page opens, so in-flight downloads (and orphaned 'searching' rows)
-# after a restart would sit untracked until the user happened to visit the page.
-try:
-    from core.video.download_monitor import ensure_started as _ensure_video_download_monitor
-    from api.video import get_video_db as _get_video_db
-    _ensure_video_download_monitor(_get_video_db)
-except Exception:
-    logger.warning("could not start the video download monitor at boot", exc_info=True)
+# Music Lite: /api/video and Video boot monitor removed.
 
 
 def _emit_rate_monitor_loop():
@@ -41946,36 +41893,6 @@ def _emit_enrichment_status_loop():
                 socketio.emit(f'enrichment:{name}', status)
             except Exception as e:
                 logger.debug(f"Error emitting {name} status: {e}")
-
-def _emit_video_enrichment_status_loop():
-    """Push the VIDEO enrichment worker statuses over the socket every 2s, exactly
-    like the music enrichment loop — so the video dashboard listens instead of
-    polling /api/video/enrichment/<svc>/status (that browser polling was flooding
-    the access log). No-op until the video engine is actually running, so this
-    never spins it up on the music side."""
-    from core.video.enrichment.engine import peek_video_enrichment_engine
-    while not globals().get('IS_SHUTTING_DOWN', False):
-        socketio.sleep(2)
-        eng = peek_video_enrichment_engine()
-        if eng is None:
-            continue
-        # Emit for EVERY registered worker (matchers + backfill: fanart / opensubtitles
-        # / ryd / sponsorblock) so new dashboard buttons get live status with no extra
-        # wiring here.
-        for svc, w in (eng.workers or {}).items():
-            try:
-                socketio.emit(f'enrichment:{svc}', w.get_stats())
-            except Exception as e:
-                logger.debug(f"Error emitting video {svc} status: {e}")
-        # The YouTube date enricher is a standalone daemon (not an engine worker),
-        # but it reports the SAME stats shape — push it on the same socket so its
-        # dashboard orb listens like the others (no /enrichment/youtube/status poll).
-        try:
-            from core.video.youtube_enrichment import get_youtube_date_enricher
-            socketio.emit('enrichment:youtube', get_youtube_date_enricher().stats())
-        except Exception as e:
-            logger.debug(f"Error emitting video youtube status: {e}")
-
 
 def _emit_tool_progress_loop():
     """Background thread that pushes all tool progress statuses every 1 second."""
@@ -42551,9 +42468,6 @@ def start_runtime_services():
         socketio.start_background_task(_emit_wishlist_count_loop)
         # Phase 3: Enrichment sidebar workers
         socketio.start_background_task(_emit_enrichment_status_loop)
-        # Phase 3 (video): push video enrichment status so the video dashboard
-        # listens instead of polling (matches music; no access-log flood).
-        socketio.start_background_task(_emit_video_enrichment_status_loop)
         # Phase 4: Tool progress pollers
         socketio.start_background_task(_emit_tool_progress_loop)
         # Phase 5: Sync/discovery progress + scans
