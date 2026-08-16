@@ -43,6 +43,7 @@ from core.download_plugins.torrent import TorrentDownloadPlugin
 from core.download_plugins.usenet import UsenetDownloadPlugin
 from core.hifi_client import HiFiClient
 from core.lidarr_download_client import LidarrDownloadClient
+from core.reaparr_client import ReaparrDownloadClient
 from core.soulseek_client import SoulseekClient
 from core.soundcloud_client import SoundcloudClient
 from core.youtube_client import YouTubeClient
@@ -184,6 +185,9 @@ def build_default_registry() -> DownloadPluginRegistry:
     # strings (e.g. orchestrator's ``source_map``). Canonical name is
     # ``deezer`` so future-facing code reads naturally.
     registry.register(PluginSpec(name='lidarr',    factory=LidarrDownloadClient,   display_name='Lidarr'))
+    # Reaparr pulls from Plex servers the user already has shared access to —
+    # no other source can do that. Contract: docs/reaparr-api-contract.md.
+    registry.register(PluginSpec(name='reaparr',   factory=ReaparrDownloadClient,  display_name='Reaparr'))
     registry.register(PluginSpec(name='soundcloud',factory=SoundcloudClient,       display_name='SoundCloud'))
     registry.register(PluginSpec(name='torrent',   factory=TorrentDownloadPlugin,  display_name='Torrent (Prowlarr)'))
     registry.register(PluginSpec(name='usenet',    factory=UsenetDownloadPlugin,   display_name='Usenet (Prowlarr)'))

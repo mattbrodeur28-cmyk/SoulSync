@@ -93,6 +93,8 @@ class ConfigManager:
         'soulseek.api_key',
         'deezer_download.arl',
         'lidarr_download.api_key',
+        'reaparr.api_key',
+        'reaparr.password',
         'prowlarr.api_key',
         'torrent_client.password',
         'usenet_client.api_key',
@@ -632,6 +634,20 @@ class ConfigManager:
                 "root_folder": "",
                 "quality_profile": "Any",
                 "cleanup_after_import": True,
+            },
+            # Reaparr — fetches from Plex servers the user already has shared
+            # access to. api_key authenticates search; username/password
+            # authenticate the transfer endpoints (Reaparr uses two schemes).
+            # See docs/reaparr-api-contract.md.
+            "reaparr": {
+                "url": "",
+                "api_key": "",
+                "username": "",
+                "password": "",
+                "category": "soulsync",
+                "cleanup_after_import": True,
+                "timeout_seconds": 30,
+                "poll_timeout_seconds": 1800,
             },
             # Prowlarr — indexer aggregator. Feeds the torrent / usenet
             # download plugins. Not a standalone source.

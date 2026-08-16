@@ -399,6 +399,25 @@ def run_service_test(service, test_config):
                 return False, f"Lidarr returned HTTP {resp.status_code}"
             except Exception as e:
                 return False, f"Lidarr connection error: {str(e)}"
+        elif service == "reaparr":
+            url = config_manager.get('reaparr.url', '')
+            api_key = config_manager.get('reaparr.api_key', '')
+            if not url or not api_key:
+                return False, "Reaparr URL and API key are required."
+            try:
+                import requests as _req
+                # Torznab caps uses the apikey scheme, so this validates the
+                # URL and key together. Transfer endpoints use a separate
+                # username/password session — see docs/reaparr-api-contract.md.
+                resp = _req.get(f"{url.rstrip('/')}/api/public/indexer/api",
+                                params={'t': 'caps', 'apikey': api_key}, timeout=10)
+                if resp.ok:
+                    return True, "Connected to Reaparr (indexer API reachable)"
+                if resp.status_code in (401, 403):
+                    return False, "Reaparr rejected the API key."
+                return False, f"Reaparr returned HTTP {resp.status_code}"
+            except Exception as e:
+                return False, f"Reaparr connection error: {str(e)}"
         elif service == "itunes":
             # Public API — just confirm we can reach it with a cheap search
             try:

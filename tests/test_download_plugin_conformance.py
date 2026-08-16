@@ -51,24 +51,23 @@ def _import_plugin_classes():
     rather than at module load — avoids dragging tidalapi /
     spotipy / yt-dlp imports into every other test module's
     collection phase."""
+    # Music Lite: tidal/qobuz/deezer removed — their client modules were
+    # deleted by the provider purge, so importing them here fails collection
+    # for the whole module.
     from core.soulseek_client import SoulseekClient
     from core.youtube_client import YouTubeClient
-    from core.tidal_download_client import TidalDownloadClient
-    from core.qobuz_client import QobuzClient
     from core.hifi_client import HiFiClient
-    from core.deezer_download_client import DeezerDownloadClient
     from core.lidarr_download_client import LidarrDownloadClient
+    from core.reaparr_client import ReaparrDownloadClient
     from core.soundcloud_client import SoundcloudClient
     from core.amazon_download_client import AmazonDownloadClient
 
     return {
         'soulseek': SoulseekClient,
         'youtube': YouTubeClient,
-        'tidal': TidalDownloadClient,
-        'qobuz': QobuzClient,
         'hifi': HiFiClient,
-        'deezer': DeezerDownloadClient,
         'lidarr': LidarrDownloadClient,
+        'reaparr': ReaparrDownloadClient,
         'soundcloud': SoundcloudClient,
         'amazon': AmazonDownloadClient,
     }
@@ -83,29 +82,32 @@ def test_default_registry_registers_all_sources():
 
     registry = build_default_registry()
     expected = {
-        'soulseek', 'youtube', 'tidal', 'qobuz',
-        'hifi', 'deezer', 'lidarr', 'soundcloud', 'amazon',
-        'torrent', 'usenet',
+        'soulseek', 'youtube', 'hifi', 'lidarr', 'reaparr',
+        'soundcloud', 'amazon', 'torrent', 'usenet',
     }
     assert set(registry.names()) == expected
 
 
-def test_deezer_dl_alias_is_registered_against_deezer_spec():
-    """Legacy ``deezer_dl`` source-name string used in config + per-
-    source dispatch must keep resolving — frontend, settings,
-    download_orchestrator's username dispatch all depend on it."""
+def test_purged_providers_are_not_registered():
+    """Music Lite removed Tidal, Qobuz and Deezer. Pin their absence so a
+    later merge from upstream that re-adds a registration fails loudly here
+    instead of booting a source whose client module was deleted.
+
+    Replaces the upstream ``test_deezer_dl_alias_is_registered_against_deezer_spec``
+    test — the ``deezer_dl`` alias resolved to a spec that no longer exists."""
     from core.download_plugins.registry import build_default_registry
 
     registry = build_default_registry()
-    spec = registry.get_spec('deezer_dl')
-    assert spec is not None
-    assert spec.name == 'deezer'
-    assert 'deezer_dl' in spec.aliases
+    for purged in ('tidal', 'qobuz', 'deezer', 'deezer_dl'):
+        assert registry.get_spec(purged) is None, (
+            f"{purged} is registered but its client module was deleted by the "
+            f"Music Lite purge"
+        )
 
 
 @pytest.mark.parametrize('plugin_name', [
-    'soulseek', 'youtube', 'tidal', 'qobuz',
-    'hifi', 'deezer', 'lidarr', 'soundcloud', 'amazon',
+    'soulseek', 'youtube', 'hifi',
+    'lidarr', 'reaparr', 'soundcloud', 'amazon',
 ])
 def test_plugin_class_has_all_required_methods(plugin_name):
     """Every registered plugin class exposes every protocol method
@@ -124,8 +126,8 @@ def test_plugin_class_has_all_required_methods(plugin_name):
 
 
 @pytest.mark.parametrize('plugin_name', [
-    'soulseek', 'youtube', 'tidal', 'qobuz',
-    'hifi', 'deezer', 'lidarr', 'soundcloud', 'amazon',
+    'soulseek', 'youtube', 'hifi',
+    'lidarr', 'reaparr', 'soundcloud', 'amazon',
 ])
 def test_plugin_class_async_methods_are_coroutines(plugin_name):
     """Methods declared async in the protocol must be async on every
@@ -162,5 +164,5 @@ def test_orchestrator_uses_registry_for_dispatch():
     assert hasattr(orchestrator, 'registry')
     assert orchestrator.client('soulseek') is orchestrator.registry.get('soulseek')
     assert orchestrator.client('youtube') is orchestrator.registry.get('youtube')
-    assert orchestrator.client('deezer_dl') is orchestrator.registry.get('deezer')
+    # Music Lite: the deezer_dl alias assertion was dropped with the provider.
     assert orchestrator.client('lidarr') is orchestrator.registry.get('lidarr')

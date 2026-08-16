@@ -1,0 +1,6 @@
+# --- Append these to your .gitignore ---
+# .venv is NOT currently ignored; a venv created inside the repo would be committed.
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/

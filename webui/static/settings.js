@@ -836,6 +836,7 @@ const HYBRID_SOURCES = [
     { id: 'deezer_dl', name: 'Deezer', icon: '/static/img/brands/deezer.png', emoji: '🎧' },
     { id: 'amazon', name: 'Amazon Music', icon: null, emoji: '🛒' },
     { id: 'lidarr', name: 'Lidarr', icon: null, emoji: '📦' },
+    { id: 'reaparr', name: 'Reaparr', icon: null, emoji: '🪄' },
     { id: 'soundcloud', name: 'SoundCloud', icon: '/static/img/brands/soundcloud.png', emoji: '☁️' },
     { id: 'torrent', name: 'Torrent', icon: null, emoji: '🧲' },
     { id: 'usenet', name: 'Usenet', icon: null, emoji: '📰' },
@@ -843,7 +844,7 @@ const HYBRID_SOURCES = [
 const ALBUM_LEVEL_HYBRID_SOURCES = new Set(['soulseek', 'torrent', 'usenet']);
 
 let _hybridSourceOrder = ['soulseek', 'youtube'];
-let _hybridSourceEnabled = { soulseek: true, youtube: true, tidal: false, qobuz: false, hifi: false, deezer_dl: false, amazon: false, lidarr: false, soundcloud: false, torrent: false, usenet: false };
+let _hybridSourceEnabled = { soulseek: true, youtube: true, tidal: false, qobuz: false, hifi: false, deezer_dl: false, amazon: false, lidarr: false, reaparr: false, soundcloud: false, torrent: false, usenet: false };
 // Enabled-but-not-fully-configured sources (per the server's status):
 // shown with a "needs setup" chip instead of being silently unchecked.
 let _hybridSourceUnready = {};
@@ -863,6 +864,7 @@ function toggleHybridSourceConfig(srcId) {
             tidal: 'tidal-download-settings-container', qobuz: 'qobuz-settings-container',
             hifi: 'hifi-download-settings-container', deezer_dl: 'deezer-download-settings-container',
             amazon: 'amazon-download-settings-container', lidarr: 'lidarr-download-settings-container',
+            reaparr: 'reaparr-settings-container',
             soundcloud: 'soundcloud-download-settings-container', torrent: 'prowlarr-source-redirect',
             usenet: 'prowlarr-source-redirect',
         };
@@ -1533,6 +1535,16 @@ async function loadSettingsData() {
         document.getElementById('deezer-download-arl').value = settings.deezer_download?.arl || '';
         document.getElementById('lidarr-url').value = settings.lidarr_download?.url || '';
         document.getElementById('lidarr-api-key').value = settings.lidarr_download?.api_key || '';
+        const _rpUrl = document.getElementById('reaparr-url');
+        const _rpKey = document.getElementById('reaparr-api-key');
+        const _rpUser = document.getElementById('reaparr-username');
+        const _rpPass = document.getElementById('reaparr-password');
+        const _rpCat = document.getElementById('reaparr-category');
+        if (_rpUrl) _rpUrl.value = settings.reaparr?.url || '';
+        if (_rpKey) _rpKey.value = settings.reaparr?.api_key || '';
+        if (_rpUser) _rpUser.value = settings.reaparr?.username || '';
+        if (_rpPass) _rpPass.value = settings.reaparr?.password || '';
+        if (_rpCat) _rpCat.value = settings.reaparr?.category || 'soulsync';
         const _prowUrl = document.getElementById('prowlarr-url');
         const _prowKey = document.getElementById('prowlarr-api-key');
         const _prowIds = document.getElementById('prowlarr-indexer-ids');
@@ -2276,6 +2288,7 @@ function updateDownloadSourceUI() {
     const deezerDlContainer = document.getElementById('deezer-download-settings-container');
     const amazonContainer = document.getElementById('amazon-download-settings-container');
     const lidarrContainer = document.getElementById('lidarr-download-settings-container');
+    const reaparrContainer = document.getElementById('reaparr-settings-container');
     const soundcloudContainer = document.getElementById('soundcloud-download-settings-container');
 
     hybridContainer.style.display = mode === 'hybrid' ? 'block' : 'none';
@@ -2305,6 +2318,7 @@ function updateDownloadSourceUI() {
     if (deezerDlContainer) deezerDlContainer.style.display = showCfg('deezer_dl') ? 'block' : 'none';
     if (amazonContainer) amazonContainer.style.display = showCfg('amazon') ? 'block' : 'none';
     if (lidarrContainer) lidarrContainer.style.display = showCfg('lidarr') ? 'block' : 'none';
+    if (reaparrContainer) reaparrContainer.style.display = showCfg('reaparr') ? 'block' : 'none';
     if (soundcloudContainer) soundcloudContainer.style.display = showCfg('soundcloud') ? 'block' : 'none';
     const prowlarrRedirect = document.getElementById('prowlarr-source-redirect');
     if (prowlarrRedirect) {
@@ -2371,6 +2385,7 @@ function updateHybridSecondaryOptions() {
         { value: 'deezer_dl', label: 'Deezer' },
         { value: 'amazon', label: 'Amazon Music' },
         { value: 'lidarr', label: 'Lidarr' },
+        { value: 'reaparr', label: 'Reaparr' },
         { value: 'soundcloud', label: 'SoundCloud' },
     ];
 
@@ -4522,6 +4537,13 @@ async function saveSettings(quiet = false) {
             url: document.getElementById('lidarr-url').value || '',
             api_key: document.getElementById('lidarr-api-key').value || '',
         },
+        reaparr: {
+            url: document.getElementById('reaparr-url')?.value || '',
+            api_key: document.getElementById('reaparr-api-key')?.value || '',
+            username: document.getElementById('reaparr-username')?.value || '',
+            password: document.getElementById('reaparr-password')?.value || '',
+            category: document.getElementById('reaparr-category')?.value || 'soulsync',
+        },
         prowlarr: {
             url: document.getElementById('prowlarr-url')?.value || '',
             api_key: document.getElementById('prowlarr-api-key')?.value || '',
@@ -5442,6 +5464,35 @@ async function testLidarrConnection() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ service: 'lidarr' })
+        });
+        const data = await resp.json();
+        if (data.success) {
+            statusEl.textContent = 'Connected';
+            statusEl.style.color = '#4caf50';
+        } else {
+            statusEl.textContent = data.error || 'Connection failed';
+            statusEl.style.color = '#f44336';
+        }
+    } catch (e) {
+        statusEl.textContent = 'Connection error';
+        statusEl.style.color = '#f44336';
+    }
+}
+
+async function testReaparrConnection() {
+    const statusEl = document.getElementById('reaparr-connection-status');
+    if (!statusEl) return;
+    statusEl.textContent = 'Checking...';
+    statusEl.style.color = '#aaa';
+    try {
+        // Save first so the backend sees the URL/key being tested.
+        // Note this probes the indexer API only — it validates the URL and
+        // API key, not the username/password used for transfers.
+        await saveSettings();
+        const resp = await fetch('/api/test-connection', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ service: 'reaparr' })
         });
         const data = await resp.json();
         if (data.success) {

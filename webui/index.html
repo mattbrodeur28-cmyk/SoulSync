@@ -3710,6 +3710,7 @@
                                         <option value="hifi">HiFi Only (Free Lossless)</option>
                                         <option value="amazon">Amazon Music Only</option>
                                         <option value="lidarr">Lidarr Only</option>
+                                        <option value="reaparr">Reaparr Only (Shared Plex)</option>
                                         <option value="soundcloud">SoundCloud Only</option>
                                         <option value="torrent">Torrent Only (via Prowlarr)</option>
                                         <option value="usenet">Usenet Only (via Prowlarr)</option>
@@ -4052,6 +4053,56 @@
                                             Uses Lidarr's indexers and download clients (Usenet/torrent) for album downloads.
                                             <br><br>
                                             <strong>Best for full-album grabs.</strong> Lidarr is album-first by design — track-name searches usually return nothing useful, so in hybrid mode Lidarr is mostly a no-op for playlists and falls through to your other sources. Use Lidarr Only when you specifically want to grab whole albums via your indexers.
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Reaparr Settings -->
+                                <div id="reaparr-settings-container" style="display: none;">
+                                    <div class="form-group">
+                                        <label>Reaparr URL:</label>
+                                        <input type="text" id="reaparr-url" placeholder="http://localhost:5000">
+                                        <div class="setting-help-text">
+                                            Full URL to your Reaparr instance (e.g. http://192.168.1.100:5000)
+                                        </div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>API Key:</label>
+                                        <input type="password" id="reaparr-api-key" placeholder="Your Reaparr API key">
+                                        <div class="setting-help-text">
+                                            Found in Reaparr → Settings → Integrations. Authenticates search.
+                                        </div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Username:</label>
+                                        <input type="text" id="reaparr-username" placeholder="Reaparr download-client username">
+                                        <div class="setting-help-text">
+                                            Reaparr uses a separate login for transfers than it does for search.
+                                        </div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Password:</label>
+                                        <input type="password" id="reaparr-password" placeholder="Reaparr download-client password">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Category:</label>
+                                        <input type="text" id="reaparr-category" placeholder="soulsync">
+                                        <div class="setting-help-text">
+                                            Transfers are tagged with this category so SoulSync only tracks its own.
+                                        </div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Reaparr Status:</label>
+                                        <div class="form-actions" style="margin-top: 4px;">
+                                            <button class="test-button" id="reaparr-test-btn" onclick="testReaparrConnection()">
+                                                Test Connection
+                                            </button>
+                                            <span id="reaparr-connection-status" class="setting-help-text" style="margin-left: 8px;"></span>
+                                        </div>
+                                        <div class="setting-help-text" style="margin-top: 6px;">
+                                            Fetches music from Plex servers you already have shared access to — a source no other backend provides.
+                                            <br><br>
+                                            <strong>Requires Reaparr with music support.</strong> Reaparr does not serve music yet: its indexer rejects music searches and its transfer path accepts video only. Until that ships, this source returns no results. Test Connection checks the URL and API key only — it does not verify the username/password used for transfers.
                                         </div>
                                     </div>
                                 </div>
