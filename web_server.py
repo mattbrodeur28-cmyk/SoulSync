@@ -2641,7 +2641,7 @@ def get_status():
             # don't depend on slskd being reachable — when one of these is the
             # active source, surface "connected" without probing slskd so the
             # dashboard / sidebar indicator stays green.
-            serverless_sources = ('youtube', 'hifi', 'qobuz', 'tidal', 'deezer_dl', 'lidarr', 'soundcloud', 'amazon')
+            serverless_sources = ('youtube', 'hifi', 'qobuz', 'tidal', 'deezer_dl', 'lidarr', 'reaparr', 'soundcloud', 'amazon')
             is_serverless = (download_mode in serverless_sources or
                              (download_mode == 'hybrid' and
                               hybrid_order and any(s in serverless_sources for s in hybrid_order)))
@@ -6923,7 +6923,7 @@ def start_download():
             if download_id:
                 # Register download for post-processing (simple transfer to /Transfer)
                 context_key = _make_context_key(username, filename)
-                is_streaming_source = username in ('youtube', 'tidal', 'qobuz', 'hifi', 'deezer_dl', 'lidarr', 'soundcloud', 'amazon')
+                is_streaming_source = username in ('youtube', 'tidal', 'qobuz', 'hifi', 'deezer_dl', 'lidarr', 'reaparr', 'soundcloud', 'amazon')
                 # Per-download check overrides: skip AcoustID and/or
                 # quality-quarantine checks on request.
                 _skip_checks = []
@@ -7359,7 +7359,7 @@ def get_download_status():
             all_streaming_downloads = run_async(download_orchestrator.get_all_downloads())
 
             for download in all_streaming_downloads:
-                if download.username in ('youtube', 'tidal', 'qobuz', 'hifi', 'deezer_dl', 'lidarr', 'soundcloud', 'amazon'):
+                if download.username in ('youtube', 'tidal', 'qobuz', 'hifi', 'deezer_dl', 'lidarr', 'reaparr', 'soundcloud', 'amazon'):
                     source_label = download.username.title()
                     # Convert DownloadStatus to transfer format that frontend expects
                     streaming_transfer = {
@@ -7546,7 +7546,7 @@ def clear_finished_downloads():
 # Streaming sources where the candidate's `username` field IS the source name
 # (Soulseek uses a real peer username; everything else stamps the source string).
 _STREAMING_SOURCE_NAMES = frozenset((
-    'youtube', 'tidal', 'qobuz', 'hifi', 'deezer_dl', 'lidarr', 'soundcloud', 'amazon',
+    'youtube', 'tidal', 'qobuz', 'hifi', 'deezer_dl', 'lidarr', 'reaparr', 'soundcloud', 'amazon',
     'torrent', 'usenet',
 ))
 
@@ -8572,7 +8572,7 @@ def get_quarantine_audit_entry(entry_id):
         osr = ctx.get('original_search_result') if isinstance(ctx.get('original_search_result'), dict) else {}
         username = (osr.get('username') or '') if isinstance(osr, dict) else ''
         streaming = ('tidal', 'youtube', 'qobuz', 'hifi', 'deezer_dl',
-                     'lidarr', 'soundcloud', 'amazon')
+                     'lidarr', 'reaparr', 'soundcloud', 'amazon')
         ti = ctx.get('track_info') if isinstance(ctx.get('track_info'), dict) else {}
         album_raw = ti.get('album', '')
         album_name = album_raw.get('name', '') if isinstance(album_raw, dict) else str(album_raw or '')
@@ -14463,7 +14463,7 @@ def redownload_search_sources(track_id):
                         quality = ext if ext in ('FLAC', 'MP3', 'OPUS', 'OGG', 'M4A', 'WAV') else candidate.quality or ''
                         svc = source_name if source_name != 'default' else 'hybrid'
                         uname = candidate.username
-                        if uname in ('youtube', 'tidal', 'qobuz', 'hifi', 'deezer_dl', 'lidarr', 'soundcloud', 'amazon'):
+                        if uname in ('youtube', 'tidal', 'qobuz', 'hifi', 'deezer_dl', 'lidarr', 'reaparr', 'soundcloud', 'amazon'):
                             svc = uname
                         source_candidates.append({
                             'username': uname,
@@ -20316,7 +20316,7 @@ def _try_source_reuse(task_id, batch_id, track):
     if not source_tracks or not last_source:
         _sr.info("Skipped — no source_tracks or no last_source")
         return False
-    if last_source.get('username') in ('youtube', 'tidal', 'qobuz', 'hifi', 'deezer_dl', 'lidarr', 'soundcloud', 'amazon'):
+    if last_source.get('username') in ('youtube', 'tidal', 'qobuz', 'hifi', 'deezer_dl', 'lidarr', 'reaparr', 'soundcloud', 'amazon'):
         _sr.info(f"Skipped — {last_source.get('username')} source (no folder-based reuse)")
         return False
 
@@ -20418,7 +20418,7 @@ def _store_batch_source(batch_id, username, filename):
     """Browse the successful download's folder and store results on the batch for reuse."""
     _sr = source_reuse_logger
     _sr.info(f"_store_batch_source called: batch={batch_id}, user={username}, file={filename}")
-    if not batch_id or username in ('youtube', 'tidal', 'qobuz', 'hifi', 'deezer_dl', 'lidarr', 'soundcloud', 'amazon', 'torrent', 'usenet'):
+    if not batch_id or username in ('youtube', 'tidal', 'qobuz', 'hifi', 'deezer_dl', 'lidarr', 'reaparr', 'soundcloud', 'amazon', 'torrent', 'usenet'):
         _sr.info(f"Skipped — no batch_id or streaming source ({username})")
         return
 
@@ -28072,7 +28072,11 @@ def _qs_metadata_sources():
     return sources
 _QS_MEDIA_SERVERS = ['plex', 'jellyfin', 'navidrome', 'soulsync']
 # Single download sources (everything the mode accepts except 'hybrid').
-_QS_DOWNLOAD_SOURCES = ['soulseek', 'youtube', 'tidal', 'qobuz', 'hifi', 'torrent', 'usenet']
+# NOTE: this list is already missing lidarr / soundcloud / amazon, which the
+# mode dropdown does accept — a pre-existing gap, so quick-setup silently
+# strips them from hybrid_order at the filter below. Left as-is here; only
+# reaparr is added.
+_QS_DOWNLOAD_SOURCES = ['soulseek', 'youtube', 'tidal', 'qobuz', 'hifi', 'reaparr', 'torrent', 'usenet']
 
 
 def _qs_metadata_available(source):

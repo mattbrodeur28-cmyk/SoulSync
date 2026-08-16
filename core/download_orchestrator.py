@@ -382,7 +382,7 @@ class DownloadOrchestrator:
             return None
 
         # 2. Filter and validate results
-        _streaming_sources = ('youtube', 'tidal', 'qobuz', 'hifi', 'deezer_dl', 'lidarr', 'soundcloud', 'amazon')
+        _streaming_sources = ('youtube', 'tidal', 'qobuz', 'hifi', 'deezer_dl', 'lidarr', 'reaparr', 'soundcloud', 'amazon')
         is_streaming = tracks[0].username in _streaming_sources if tracks else False
 
         if is_streaming and expected_track:

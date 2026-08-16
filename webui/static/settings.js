@@ -899,6 +899,7 @@ const HYBRID_SOURCE_PROBE = {
     deezer_dl:  () => _ssJson('/api/deezer-download/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).then(j => j.success === true),
     amazon:     () => _ssJson('/api/amazon/test-connection').then(j => j.connected === true),
     lidarr:     () => _ssTestConn('lidarr'),
+    reaparr:    () => _ssTestConn('reaparr'),
     soundcloud: () => _ssJson('/api/soundcloud/status').then(j => j.available === true && j.reachable === true),
     torrent:    () => _ssTestConn('torrent_client'),
     usenet:     () => _ssTestConn('usenet_client'),

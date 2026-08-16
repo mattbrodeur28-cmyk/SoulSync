@@ -2855,6 +2855,7 @@ function _downloadModalSourceLabel(source) {
         deezer_dl: 'Deezer',
         amazon: 'Amazon',
         lidarr: 'Lidarr',
+        reaparr: 'Reaparr',
         soundcloud: 'SoundCloud'
     };
     const key = String(source || '').toLowerCase();
@@ -3515,7 +3516,7 @@ async function updateModalWithLiveDownloadProgress() {
                 // Extract display title from filename (handle YouTube encoding)
                 let downloadTitle = '';
                 if (downloadInfo.filename) {
-                    if ((downloadInfo.username === 'youtube' || downloadInfo.username === 'tidal' || downloadInfo.username === 'qobuz' || downloadInfo.username === 'hifi') && downloadInfo.filename.includes('||')) {
+                    if ((downloadInfo.username === 'youtube' || downloadInfo.username === 'tidal' || downloadInfo.username === 'qobuz' || downloadInfo.username === 'hifi' || downloadInfo.username === 'reaparr') && downloadInfo.filename.includes('||')) {
                         const parts = downloadInfo.filename.split('||');
                         downloadTitle = parts[1] || parts[0];
                     } else {

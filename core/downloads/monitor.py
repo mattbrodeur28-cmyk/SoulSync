@@ -61,7 +61,7 @@ MAX_TOTAL_QUARANTINE_RETRIES = 100
 # instead, so anything not in this set is bucketed under 'soulseek' for the
 # per-source retry budget.
 _STREAMING_SOURCE_NAMES = frozenset((
-    'youtube', 'tidal', 'qobuz', 'hifi', 'deezer_dl', 'lidarr', 'soundcloud', 'amazon',
+    'youtube', 'tidal', 'qobuz', 'hifi', 'deezer_dl', 'lidarr', 'reaparr', 'soundcloud', 'amazon',
     'torrent', 'usenet',
 ))
 

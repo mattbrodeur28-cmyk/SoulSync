@@ -168,7 +168,10 @@ def get_valid_candidates(results, spotify_track, query):
     # a slskd-style ``Artist/Album/Track.flac`` path, so the Soulseek matcher would extract
     # garbage segments from it. Routing them through the streaming path means score_track_match
     # reads ``r.title`` and ``r.artist`` directly (which the torrent/usenet projections pre-fill).
-    _streaming_sources = ("youtube", "tidal", "qobuz", "hifi", "deezer_dl", "soundcloud", "amazon", "torrent", "usenet")
+    # Reaparr belongs here too: its projections pre-fill title/artist from the
+    # Plex part metadata, and its filename is ``download_token||display`` — the
+    # Soulseek matcher would parse that as a path and extract garbage segments.
+    _streaming_sources = ("youtube", "tidal", "qobuz", "hifi", "deezer_dl", "soundcloud", "amazon", "torrent", "usenet", "reaparr")
     if results[0].username in _streaming_sources:
         source_label = results[0].username.replace('_dl', '').title()
         expected_artists = spotify_track.artists if spotify_track else []

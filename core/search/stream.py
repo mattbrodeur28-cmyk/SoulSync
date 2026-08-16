@@ -47,7 +47,7 @@ def _build_stream_queries(track_name: str, artist_name: str, effective_mode: str
     """Build an ordered, deduped list of search queries to try."""
     queries: list[str] = []
 
-    is_streaming_source = effective_mode in ('youtube', 'tidal', 'qobuz', 'hifi', 'deezer_dl', 'lidarr')
+    is_streaming_source = effective_mode in ('youtube', 'tidal', 'qobuz', 'hifi', 'deezer_dl', 'lidarr', 'reaparr')
 
     if is_streaming_source:
         if artist_name and track_name:

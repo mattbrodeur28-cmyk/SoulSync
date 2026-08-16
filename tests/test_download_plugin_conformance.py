@@ -105,6 +105,59 @@ def test_purged_providers_are_not_registered():
         )
 
 
+def test_registered_sources_are_classified_as_streaming():
+    """Every registered source except Soulseek must appear in the
+    ``_STREAMING_SOURCE_NAMES`` sets.
+
+    The registry docstring claims one ``register()`` call adds a source to
+    every dispatch path. That is true for DISPATCH, but a parallel surface of
+    hardcoded tuples classifies a download by its ``username`` field, and the
+    documented rule there is: streaming sources stamp their canonical source
+    name, Soulseek stamps a real peer username, and *anything not in the set is
+    bucketed as Soulseek*.
+
+    A source missing from these sets is silently treated as a Soulseek peer
+    transfer — wrong retry budget, and the engine-fallback status path skipped
+    so its downloads never resolve. Reaparr shipped with exactly that bug.
+    This pins the invariant so the next source fails here instead.
+    """
+    from core.download_plugins.registry import build_default_registry
+    from core.downloads.monitor import _STREAMING_SOURCE_NAMES as MONITOR_NAMES
+    from core.downloads.status import _STREAMING_SOURCE_NAMES as STATUS_NAMES
+
+    registry = build_default_registry()
+    # Soulseek is the one source whose username is a peer name, not a source
+    # name — it is correctly absent from these sets.
+    expected = set(registry.names()) - {'soulseek'}
+
+    assert not (expected - STATUS_NAMES), (
+        f"registered but missing from core.downloads.status."
+        f"_STREAMING_SOURCE_NAMES: {sorted(expected - STATUS_NAMES)}"
+    )
+    assert not (expected - MONITOR_NAMES), (
+        f"registered but missing from core.downloads.monitor."
+        f"_STREAMING_SOURCE_NAMES: {sorted(expected - MONITOR_NAMES)}"
+    )
+
+
+def test_source_resolution_does_not_misbucket_a_named_source():
+    """A source name must resolve to itself, and only a real peer username
+    should collapse into the shared 'soulseek' retry bucket."""
+    from core.download_plugins.registry import build_default_registry
+    from core.downloads.monitor import _resolve_download_source
+
+    for name in build_default_registry().names():
+        if name == 'soulseek':
+            continue
+        assert _resolve_download_source(name) == name, (
+            f"{name} is being bucketed as {_resolve_download_source(name)!r} — "
+            f"it is missing from _STREAMING_SOURCE_NAMES"
+        )
+
+    # A genuine slskd peer name still collapses to the soulseek bucket.
+    assert _resolve_download_source('SomeRandomPeer123') == 'soulseek'
+
+
 @pytest.mark.parametrize('plugin_name', [
     'soulseek', 'youtube', 'hifi',
     'lidarr', 'reaparr', 'soundcloud', 'amazon',
