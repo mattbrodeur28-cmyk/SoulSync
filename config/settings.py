@@ -809,6 +809,21 @@ class ConfigManager:
                 # Turn off to canonicalize casing to the metadata source.
                 "reorganize_preserve_casing": True,
             },
+            "wishlist": {
+                # Cap how many tracks one scheduled wishlist cycle submits.
+                #
+                # Submitting the whole wishlist at once wedges the pipeline on a
+                # large list: process_wishlist_automatically returns early while
+                # ANY wishlist batch is still active, and slskd's shared search
+                # budget (core/slskd_throttle: 35 creations / 220s ~= 573/hour)
+                # means a 7000-track batch stays active for ~12 hours. No new
+                # cycle runs in that window, so retry backoff never advances and
+                # the albums/singles cycle never toggles.
+                #
+                # 750 is sized to roughly one hour of that search budget. 0
+                # disables the cap (pre-cap behaviour).
+                "max_tracks_per_cycle": 750,
+            },
             "scripts": {
                 "path": "./scripts",
                 "timeout": 60

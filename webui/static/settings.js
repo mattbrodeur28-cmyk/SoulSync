@@ -1707,6 +1707,8 @@ async function loadSettingsData() {
         document.getElementById('allow-duplicate-tracks').checked = settings.wishlist?.allow_duplicate_tracks !== false;
         const _wlTtl = document.getElementById('wishlist-ignore-ttl');
         if (_wlTtl) _wlTtl.value = settings.wishlist?.ignore_ttl_days ?? 30;
+        const _wlCap = document.getElementById('wishlist-max-per-cycle');
+        if (_wlCap) _wlCap.value = settings.wishlist?.max_tracks_per_cycle ?? 750;
 
         // Populate Playlist Sync settings
         document.getElementById('create-backup').checked = settings.playlist_sync?.create_backup !== false;
@@ -4630,6 +4632,12 @@ async function saveSettings(quiet = false) {
             allow_duplicate_tracks: document.getElementById('allow-duplicate-tracks').checked,
             ignore_ttl_days: Math.max(1, Math.min(365,
                 parseInt(document.getElementById('wishlist-ignore-ttl')?.value, 10) || 30)),
+            // 0 = no cap. `|| 750` would turn a deliberate 0 into 750, so the
+            // parse is checked explicitly.
+            max_tracks_per_cycle: (() => {
+                const raw = parseInt(document.getElementById('wishlist-max-per-cycle')?.value, 10);
+                return Number.isNaN(raw) ? 750 : Math.max(0, Math.min(10000, raw));
+            })(),
         },
         playlist_sync: {
             create_backup: document.getElementById('create-backup').checked,

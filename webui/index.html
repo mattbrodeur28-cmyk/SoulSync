@@ -5175,6 +5175,13 @@
                                 </div>
 
                                 <div class="form-group">
+                                    <label for="wishlist-max-per-cycle">Max tracks per wishlist cycle</label>
+                                    <input type="number" id="wishlist-max-per-cycle" min="0" max="10000" step="50" value="750">
+                                    <span class="info-icon" role="button" tabindex="0" title="What's this?" onclick="toggleSettingHelp(this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleSettingHelp(this);}">i</span>
+                                    <small class="settings-hint setting-help-body" hidden>How many tracks one scheduled wishlist run submits. A very large wishlist submitted all at once blocks every later run until it finishes — and Soulseek only allows about 570 searches an hour, so a 7000-track batch can stay active for half a day. 750 is roughly one hour of searching. Least-recently-tried tracks go first, so the whole wishlist is still covered over successive runs. Set 0 for no limit. The manual "Process Wishlist Now" button is never capped.</small>
+                                </div>
+
+                                <div class="form-group">
                                     <label for="wishlist-ignore-ttl">Removed-track re-try window (days)</label>
                                     <input type="number" id="wishlist-ignore-ttl" min="1" max="365" step="1" value="30">
                                     <span class="info-icon" role="button" tabindex="0" title="What's this?" onclick="toggleSettingHelp(this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleSettingHelp(this);}">i</span>
