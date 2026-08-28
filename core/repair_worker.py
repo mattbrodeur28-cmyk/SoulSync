@@ -2863,38 +2863,28 @@ class RepairWorker:
         if not best_id:
             return {'success': False, 'error': 'Could not determine best track ID'}
 
-        remove_ids = []
+        # (track_id, file_path or None) pairs. Paired rather than two parallel
+        # lists because each id's DB row now lives or dies on ITS OWN file's
+        # outcome — a track with no file_path has no move to succeed or fail.
+        remove_targets = []
         for t in tracks:
             tid = t.get('track_id') or t.get('id')
             if tid and str(tid) != str(best_id):
-                remove_ids.append(tid)
+                remove_targets.append((tid, t.get('file_path') or None))
 
-        if not remove_ids:
+        if not remove_targets:
             return {'success': False, 'error': 'No duplicates to remove'}
-
-        # Collect file paths before deleting DB entries
-        remove_paths = []
-        for t in tracks:
-            tid = t.get('track_id') or t.get('id')
-            if tid and str(tid) != str(best_id) and t.get('file_path'):
-                remove_paths.append(t['file_path'])
-
-        conn = None
-        try:
-            conn = self.db._get_connection()
-            cursor = conn.cursor()
-            placeholders = ','.join(['?'] * len(remove_ids))
-            cursor.execute(f"DELETE FROM tracks WHERE id IN ({placeholders})", remove_ids)
-            conn.commit()
-            removed = cursor.rowcount
-        finally:
-            if conn:
-                conn.close()
 
         # Move duplicate files to the <transfer>/deleted quarantine instead of hard
         # deleting them — recoverable, and consistent with the older duplicate
         # cleaner (the reorganizer already skips <transfer>/deleted, #746). Resolve
         # paths first for cross-environment (Docker) compat.
+        #
+        # ORDER MATTERS: this runs BEFORE the DELETE. It used to run after an
+        # unconditional delete, so a failed move left the file on disk with no DB
+        # row — the next library scan re-added it, it was flagged as a duplicate
+        # again, and cleanup failed again. An indefinite churn loop that filled
+        # logs with "DB entry removed, file left on disk" for the same files.
         download_folder = None
         if self._config_manager:
             download_folder = self._config_manager.get('soulseek.download_path', '')
@@ -2902,14 +2892,28 @@ class RepairWorker:
         deleted_root = os.path.join(self.transfer_folder, 'deleted')
         files_deleted = 0
         files_failed = 0
-        for fpath in remove_paths:
+        remove_ids = []      # rows safe to delete
+        retained_ids = []    # rows kept because the file is provably still there
+        for tid, fpath in remove_targets:
+            if not fpath:
+                # No path on the row at all — nothing to move, so nothing can
+                # go wrong. The row is a pure DB artifact; drop it.
+                remove_ids.append(tid)
+                continue
             resolved = _resolve_file_path(fpath, self.transfer_folder, download_folder, config_manager=self._config_manager)
             if not resolved or not os.path.exists(resolved):
                 # #971/Docker: the stored path didn't map to a file the container
                 # can see. Previously this was skipped silently — the DB row was
                 # removed, the file left on disk, and NO log explained why. Surface
                 # it so the user can fix their volume mapping / Music Paths.
+                #
+                # The row is still dropped here, deliberately: we cannot tell a
+                # bad volume mapping from a file that genuinely no longer exists,
+                # and retaining it would leave findings permanently stuck for
+                # deleted files — a rescan can't find what isn't there (see the
+                # note in fix_finding's `_comma_split_files_from_db` fallback).
                 files_failed += 1
+                remove_ids.append(tid)
                 logger.warning(
                     "Duplicate cleanup: could not locate file to remove (DB path %r "
                     "did not resolve to an existing file). DB entry removed, file left "
@@ -2921,14 +2925,23 @@ class RepairWorker:
                 os.makedirs(os.path.dirname(dest), exist_ok=True)
                 shutil.move(resolved, dest)
                 files_deleted += 1
+                remove_ids.append(tid)
             except OSError as e:
                 # Was `except OSError: pass` — a Docker PUID/PGID permission mismatch
                 # on the media volume silently no-op'd the removal with no log.
+                #
+                # os.path.exists(resolved) was True above, so the file provably
+                # EXISTS and we simply couldn't move it. Keep the DB row: dropping
+                # it is what diverged DB from disk and caused the rescan churn.
+                # Retaining it means the operation is simply retryable once the
+                # user fixes permissions.
                 files_failed += 1
+                retained_ids.append(tid)
                 logger.warning(
                     "Duplicate cleanup: failed to move %s to the deleted folder (%s). "
-                    "DB entry removed, file left on disk — in Docker this is usually a "
-                    "PUID/PGID permission mismatch on the media volume.", resolved, e)
+                    "DB entry KEPT so the cleanup can be retried once this is fixed — "
+                    "in Docker this is usually a PUID/PGID permission mismatch on the "
+                    "media volume.", resolved, e)
                 continue
             # Clean up empty parent directories (best effort, cosmetic; never remove
             # the transfer folder itself). A failure here must not count as a failed
@@ -2946,11 +2959,39 @@ class RepairWorker:
             except OSError:
                 pass
 
+        removed = 0
+        if remove_ids:
+            conn = None
+            try:
+                conn = self.db._get_connection()
+                cursor = conn.cursor()
+                placeholders = ','.join(['?'] * len(remove_ids))
+                cursor.execute(f"DELETE FROM tracks WHERE id IN ({placeholders})", remove_ids)
+                conn.commit()
+                removed = cursor.rowcount
+            finally:
+                if conn:
+                    conn.close()
+
         msg = f'Kept best quality copy, removed {removed} duplicate(s)'
         if files_deleted:
             msg += f' and moved {files_deleted} file(s) to the deleted folder'
         if files_failed:
             msg += f' — {files_failed} file(s) could NOT be removed (see logs)'
+        if retained_ids:
+            msg += (f'; {len(retained_ids)} duplicate(s) kept in the database '
+                    f'for retry')
+            # Only a retained row makes this genuinely unfinished. success=False
+            # routes to _set_finding_error, which leaves the finding pending with
+            # the reason ON the row instead of resolving it — the op reporting
+            # success while doing nothing is the original #971 complaint.
+            # Unresolvable-path failures do NOT land here: their rows were
+            # dropped, so there is nothing left to retry.
+            return {'success': False, 'action': 'removed_duplicates', 'message': msg,
+                    'error': (f'{len(retained_ids)} duplicate file(s) could not be moved '
+                              f'(permission denied). Database entries kept so this can be '
+                              f'retried — check PUID/PGID on the media volume.'),
+                    'files_deleted': files_deleted, 'files_failed': files_failed}
         return {'success': True, 'action': 'removed_duplicates', 'message': msg,
                 'files_deleted': files_deleted, 'files_failed': files_failed}
 

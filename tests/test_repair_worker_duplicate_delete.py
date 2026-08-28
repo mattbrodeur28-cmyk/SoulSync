@@ -19,6 +19,7 @@ The fix logs each failure with a Docker-specific hint and surfaces a
 from __future__ import annotations
 
 import logging
+import os
 
 from database.music_database import MusicDatabase
 from core.repair_worker import RepairWorker
@@ -110,9 +111,20 @@ def test_unresolvable_path_logs_and_counts_failure_but_still_cleans_db(tmp_path,
     assert any('could not locate file to remove' in r.message.lower() for r in caplog.records)
 
 
-def test_permission_error_logs_puid_hint_and_counts_failure(tmp_path, caplog, monkeypatch):
+def test_permission_error_logs_puid_hint_and_RETAINS_db_row(tmp_path, caplog, monkeypatch):
     """Docker PUID/PGID permission mismatch: the move raises, previously
-    swallowed by `except OSError: pass`. Now logged with the PUID/PGID hint."""
+    swallowed by `except OSError: pass`. Now logged with the PUID/PGID hint.
+
+    The DB row is now KEPT. This reverses the earlier behaviour on purpose.
+    Deleting the row while the file stayed on disk diverged DB from disk: the
+    next library scan re-added the file, it was flagged as a duplicate again,
+    and cleanup failed again — an indefinite churn loop that filled production
+    logs with the same paths over and over.
+
+    `os.path.exists` returned True before the move was attempted, so the file
+    provably EXISTS and we simply could not move it. That is retryable, unlike
+    the unresolvable-path case above, where we cannot prove anything.
+    """
     db, w = _worker(tmp_path)
     keep = tmp_path / "keep.flac"; keep.write_text("k")
     dupe = tmp_path / "dupe.flac"; dupe.write_text("d")
@@ -137,9 +149,105 @@ def test_permission_error_logs_puid_hint_and_counts_failure(tmp_path, caplog, mo
     assert res['files_deleted'] == 0
     assert res['files_failed'] == 1
     assert dupe.exists()                   # mock raised — file not moved
-    assert _track_ids(db) == ['1']
+    assert _track_ids(db) == ['1', '2']     # row RETAINED — file is still there
     joined = " ".join(r.message for r in caplog.records).lower()
     assert 'failed to move' in joined and ('puid' in joined or 'permission' in joined)
+
+
+def test_total_permission_failure_reports_failure_so_finding_stays_pending(tmp_path, monkeypatch):
+    """Nothing was cleaned, so the op must not claim success.
+
+    ``fix_finding`` calls ``resolve_finding()`` on success and
+    ``_set_finding_error()`` otherwise. Reporting success here would resolve the
+    finding while the duplicate is still on disk AND still in the DB — the
+    finding would silently reappear on the next scan. Returning failure keeps it
+    pending with the reason attached to the row.
+    """
+    db, w = _worker(tmp_path)
+    keep = tmp_path / "keep.flac"; keep.write_text("k")
+    dupe = tmp_path / "dupe.flac"; dupe.write_text("d")
+    _insert_track(db, 1, "Song", str(keep))
+    _insert_track(db, 2, "Song", str(dupe))
+
+    import core.repair_worker as rw
+    monkeypatch.setattr(rw.shutil, "move",
+                        lambda s, d: (_ for _ in ()).throw(PermissionError(13, "Permission denied")))
+
+    details = {'tracks': [
+        {'id': 1, 'file_path': str(keep), 'bitrate': 1000},
+        {'id': 2, 'file_path': str(dupe), 'bitrate': 900},
+    ], '_fix_action': '1'}
+
+    res = w._fix_duplicates('track', '1', str(keep), details)
+
+    assert res['success'] is False
+    assert res['error']                       # a reason lands on the finding row
+    assert 'permission' in res['error'].lower()
+    assert 'kept in the database for retry' in res['message']
+    assert _track_ids(db) == ['1', '2']
+
+
+def test_mixed_batch_deletes_only_the_rows_whose_files_moved(tmp_path, monkeypatch):
+    """The core of the fix: each row's fate follows ITS OWN file.
+
+    Two duplicates, one movable and one not. The movable one's row must go, the
+    unmovable one's row must stay. Before the fix a single DELETE removed both
+    ids up front, so the failed file was orphaned from the DB.
+    """
+    db, w = _worker(tmp_path)
+    keep = tmp_path / "keep.flac"; keep.write_text("k")
+    ok = tmp_path / "movable.flac"; ok.write_text("m")
+    bad = tmp_path / "locked.flac"; bad.write_text("b")
+    _insert_track(db, 1, "Song", str(keep))
+    _insert_track(db, 2, "Song", str(ok))
+    _insert_track(db, 3, "Song", str(bad))
+
+    import core.repair_worker as rw
+    real_move = rw.shutil.move
+
+    def _selective(src, dst):
+        if os.path.basename(src) == "locked.flac":
+            raise PermissionError(13, "Permission denied")
+        return real_move(src, dst)
+
+    monkeypatch.setattr(rw.shutil, "move", _selective)
+
+    details = {'tracks': [
+        {'id': 1, 'file_path': str(keep), 'bitrate': 1000},
+        {'id': 2, 'file_path': str(ok), 'bitrate': 900},
+        {'id': 3, 'file_path': str(bad), 'bitrate': 800},
+    ], '_fix_action': '1'}
+
+    res = w._fix_duplicates('track', '1', str(keep), details)
+
+    assert res['files_deleted'] == 1
+    assert res['files_failed'] == 1
+    assert res['success'] is False            # unfinished work remains
+    assert not ok.exists()                    # moved to quarantine
+    assert bad.exists()                       # still on disk
+    # Row 2 gone (its file moved), row 3 retained (its file is still there).
+    assert _track_ids(db) == ['1', '3']
+
+
+def test_track_row_without_file_path_is_still_removed(tmp_path):
+    """A duplicate row carrying no file_path has no move that can fail, so it is
+    a pure DB artifact and must still be cleaned up. Guards the paired-list
+    refactor, where remove_ids and remove_paths were previously unaligned."""
+    db, w = _worker(tmp_path)
+    keep = tmp_path / "keep.flac"; keep.write_text("k")
+    _insert_track(db, 1, "Song", str(keep))
+    _insert_track(db, 2, "Song", None)
+
+    details = {'tracks': [
+        {'id': 1, 'file_path': str(keep), 'bitrate': 1000},
+        {'id': 2, 'file_path': None, 'bitrate': 900},
+    ], '_fix_action': '1'}
+
+    res = w._fix_duplicates('track', '1', str(keep), details)
+
+    assert res['success'] is True
+    assert res['files_failed'] == 0
+    assert _track_ids(db) == ['1']
 
 
 # ---------------------------------------------------------------------------
