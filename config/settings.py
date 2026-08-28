@@ -87,6 +87,7 @@ class ConfigManager:
         'qobuz.session',             # full dict (app_id, app_secret, user_auth_token)
         # Media servers
         'plex.token',
+        'plex_secondary.token',
         'jellyfin.api_key',
         'navidrome.password',
         # Download sources
@@ -486,6 +487,16 @@ class ConfigManager:
                 "client_id": "",
                 "client_secret": "",
                 "redirect_uri": "http://127.0.0.1:8889/tidal/callback"
+            },
+            # Second Plex server, used ONLY by the Plex-to-Plex transfer
+            # (core/plex_transfer.py). Not part of active_media_server — the
+            # transfer needs both servers connected at once.
+            "plex_secondary": {
+                "base_url": "",
+                "token": "",
+                # Fuzzy-match floor for tracks with no usable guid. Above this
+                # a title/artist candidate is accepted as the same recording.
+                "match_threshold": 0.85,
             },
             "plex": {
                 "base_url": "",
@@ -1150,6 +1161,15 @@ class ConfigManager:
 
     def get_plex_config(self) -> Dict[str, str]:
         return self.get('plex', {})
+
+    def get_plex_secondary_config(self) -> Dict[str, str]:
+        """Config for the SECOND Plex server used by server-to-server transfer.
+
+        Deliberately not part of the ``active_media_server`` rotation — that is
+        a single value referenced across 80+ files, and transfer needs both
+        servers live at once without disturbing which one the rest of the app
+        treats as canonical."""
+        return self.get('plex_secondary', {})
 
     def get_jellyfin_config(self) -> Dict[str, str]:
         return self.get('jellyfin', {})

@@ -1381,6 +1381,12 @@ async function loadSettingsData() {
         if (plexUrlInput) plexUrlInput.addEventListener('input', updatePlexConfigurationButtons);
         if (plexTokenInput) plexTokenInput.addEventListener('input', updatePlexConfigurationButtons);
         updatePlexConfigurationButtons();
+        const _p2Url = document.getElementById('plex-secondary-url');
+        const _p2Tok = document.getElementById('plex-secondary-token');
+        const _p2Thr = document.getElementById('plex-secondary-threshold');
+        if (_p2Url) _p2Url.value = settings.plex_secondary?.base_url || '';
+        if (_p2Tok) _p2Tok.value = settings.plex_secondary?.token || '';
+        if (_p2Thr) _p2Thr.value = settings.plex_secondary?.match_threshold ?? 0.85;
 
         // Populate Jellyfin settings
         document.getElementById('jellyfin-url').value = settings.jellyfin?.base_url || '';
@@ -4420,6 +4426,14 @@ async function saveSettings(quiet = false) {
             base_url: document.getElementById('plex-url').value,
             token: document.getElementById('plex-token').value
         },
+        plex_secondary: {
+            base_url: document.getElementById('plex-secondary-url')?.value || '',
+            token: document.getElementById('plex-secondary-token')?.value || '',
+            match_threshold: (() => {
+                const raw = parseFloat(document.getElementById('plex-secondary-threshold')?.value);
+                return Number.isNaN(raw) ? 0.85 : Math.max(0.5, Math.min(1, raw));
+            })(),
+        },
         jellyfin: {
             base_url: document.getElementById('jellyfin-url').value,
             api_key: document.getElementById('jellyfin-api-key').value,
@@ -5513,6 +5527,51 @@ async function testReaparrConnection() {
         }
     } catch (e) {
         statusEl.textContent = 'Connection error';
+        statusEl.style.color = '#f44336';
+    }
+}
+
+async function runPlexTransfer(operation, dryRun) {
+    const statusEl = document.getElementById('plex-transfer-status');
+    if (!statusEl) return;
+
+    // A real transfer writes to a live Plex server, so confirm it explicitly.
+    // Preview needs no confirmation because it writes nothing.
+    if (!dryRun) {
+        const what = operation === 'ratings' ? 'song ratings' : 'playlists';
+        if (!confirm(`Transfer ${what} to the SECOND Plex server?\n\n` +
+                     `Nothing is deleted and no rating is ever cleared, but ` +
+                     `playlists will be created there. Run a preview first if ` +
+                     `you have not.`)) {
+            return;
+        }
+    }
+
+    statusEl.style.color = '#aaa';
+    statusEl.textContent = dryRun ? 'Previewing…' : 'Transferring…';
+    try {
+        // Save first so the backend sees the URL/token/threshold being used.
+        await saveSettings();
+        const resp = await fetch(`/api/plex-transfer/${operation}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dry_run: dryRun })
+        });
+        const data = await resp.json();
+        if (!data.success) {
+            statusEl.textContent = data.error || 'Transfer failed';
+            statusEl.style.color = '#f44336';
+            return;
+        }
+        let msg = data.summary || '';
+        if (data.unmatched_count > 0) {
+            const sample = (data.unmatched || []).slice(0, 3).join('; ');
+            msg += ` — unmatched e.g. ${sample}`;
+        }
+        statusEl.textContent = msg;
+        statusEl.style.color = data.unmatched_count > 0 ? '#ffb300' : '#4caf50';
+    } catch (e) {
+        statusEl.textContent = 'Transfer error';
         statusEl.style.color = '#f44336';
     }
 }

@@ -3257,6 +3257,44 @@
                                         <div class="form-actions">
                                             <button id="plex-config-action-button" class="detect-button" onclick="clearPlexConfiguration()">Clear Configuration</button>
                                         </div>
+
+                                        <!-- Second Plex server: playlist + rating transfer -->
+                                        <hr style="border:none;border-top:1px solid rgba(255,255,255,.08);margin:18px 0;">
+                                        <div class="form-group">
+                                            <label>Second Plex Server URL (optional):</label>
+                                            <input type="url" id="plex-secondary-url" placeholder="http://other-plex:32400">
+                                            <span class="info-icon" role="button" tabindex="0" title="What's this?" onclick="toggleSettingHelp(this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleSettingHelp(this);}">i</span>
+                                            <div class="setting-help-text setting-help-body" hidden>
+                                                A second Plex server, used only for transferring playlists and song ratings between the two. It does not change which server SoulSync scans, syncs to, or downloads for.
+                                            </div>
+                                        </div>
+                                        <div class="form-group">
+                                            <label>Second Plex Token:</label>
+                                            <input type="password" id="plex-secondary-token" placeholder="X-Plex-Token">
+                                            <div class="form-actions" style="justify-content:flex-end; width:100%; flex-basis:100%; margin-top:8px;">
+                                                <button class="test-button" onclick="testConnection('plex_secondary')">Connect</button>
+                                            </div>
+                                        </div>
+                                        <div class="form-group">
+                                            <label>Match threshold (no-GUID fallback):</label>
+                                            <input type="number" id="plex-secondary-threshold" min="0.5" max="1" step="0.05" value="0.85">
+                                            <div class="setting-help-text">
+                                                Tracks matched by the Plex agent transfer exactly via their GUID. This only applies to tracks without one (unmatched local files) — higher is stricter.
+                                            </div>
+                                        </div>
+                                        <div class="form-group">
+                                            <label>Transfer (this server &rarr; second server):</label>
+                                            <div class="form-actions" style="margin-top:4px; flex-wrap:wrap; gap:6px;">
+                                                <button class="test-button" onclick="runPlexTransfer('playlists', true)">Preview Playlists</button>
+                                                <button class="test-button" onclick="runPlexTransfer('playlists', false)">Transfer Playlists</button>
+                                                <button class="test-button" onclick="runPlexTransfer('ratings', true)">Preview Ratings</button>
+                                                <button class="test-button" onclick="runPlexTransfer('ratings', false)">Transfer Ratings</button>
+                                            </div>
+                                            <div id="plex-transfer-status" class="setting-help-text" style="margin-top:8px;"></div>
+                                            <div class="setting-help-text" style="margin-top:6px;">
+                                                <strong>Always preview first.</strong> Preview writes nothing and reports how many tracks matched. Ratings copy 0&ndash;10 (10 = the heart), and a rating is never cleared on the destination.
+                                            </div>
+                                        </div>
                                     </div>
                                     <div id="plex-setup">
                                         <div id="plex-setup-buttons" class="form-actions">

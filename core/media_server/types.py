@@ -50,6 +50,12 @@ class TrackInfo:
     track_number: Optional[int] = None
     year: Optional[int] = None
     rating: Optional[float] = None
+    # Provider-stable identity (Plex: ``plex://track/<hash>``). Two Plex
+    # servers that both matched a recording with the Plex Music agent report
+    # the SAME guid, which makes it the authoritative key for server-to-server
+    # transfer — title/artist matching is only the fallback. None when the
+    # server doesn't expose one or the item was never agent-matched.
+    guid: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Per-server constructors — mirror Cin's metadata Album.from_X_dict
@@ -88,6 +94,9 @@ class TrackInfo:
             track_number=track.trackNumber,
             year=track.year,
             rating=track.userRating,
+            # getattr: guid lives on Audio._loadData, but an unmatched or
+            # partially-loaded item can still be missing it.
+            guid=getattr(track, 'guid', None),
         )
 
 

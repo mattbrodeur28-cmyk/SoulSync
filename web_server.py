@@ -3554,7 +3554,7 @@ def handle_settings():
                     for key, value in _experimental_in.items():
                         config_manager.set(f'experimental.{key}', value)
 
-                for service in ['spotify', 'plex', 'jellyfin', 'navidrome', 'soulseek', 'download_source', 'settings', 'database', 'metadata_enhancement', 'file_organization', 'playlist_sync', 'hifi_download', 'amazon_download', 'lidarr_download', 'reaparr', 'prowlarr', 'torrent_client', 'usenet_client', 'acoustid', 'lastfm', 'genius', 'import', 'lossy_copy', 'album_downloads', 'listening_stats', 'ui_appearance', 'youtube', 'content_filter', 'itunes', 'm3u_export', 'musicbrainz', 'audiodb', 'metadata', 'hydrabase', 'security', 'library', 'discover', 'wishlist', 'genre_whitelist', 'post_processing', 'playlists', 'experimental']:
+                for service in ['spotify', 'plex', 'plex_secondary', 'jellyfin', 'navidrome', 'soulseek', 'download_source', 'settings', 'database', 'metadata_enhancement', 'file_organization', 'playlist_sync', 'hifi_download', 'amazon_download', 'lidarr_download', 'reaparr', 'prowlarr', 'torrent_client', 'usenet_client', 'acoustid', 'lastfm', 'genius', 'import', 'lossy_copy', 'album_downloads', 'listening_stats', 'ui_appearance', 'youtube', 'content_filter', 'itunes', 'm3u_export', 'musicbrainz', 'audiodb', 'metadata', 'hydrabase', 'security', 'library', 'discover', 'wishlist', 'genre_whitelist', 'post_processing', 'playlists', 'experimental']:
                     if service in new_settings:
                         if service == 'experimental' and isinstance(_experimental_in, dict):
                             continue
@@ -18752,6 +18752,49 @@ def cleanup_wishlist():
         import traceback
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/plex-transfer/<operation>', methods=['POST'])
+def plex_transfer(operation):
+    """Transfer playlists or ratings between two configured Plex servers.
+
+    ``operation`` is 'playlists' or 'ratings'. Body:
+      dry_run  — default TRUE. Writes require an explicit false.
+      reverse  — swap direction (secondary becomes the source).
+      names    — playlists only: restrict to these playlist names.
+
+    Returns the TransferReport, including everything that did NOT match, so the
+    user can judge coverage before enabling writes.
+    """
+    if operation not in ('playlists', 'ratings'):
+        return jsonify({"success": False,
+                        "error": "operation must be 'playlists' or 'ratings'"}), 400
+    try:
+        from core.plex_transfer import build_transfer
+
+        data = request.get_json(silent=True) or {}
+        # Default TRUE: only an explicit false enables writing to a live server.
+        dry_run = data.get('dry_run', True) is not False
+
+        transfer = build_transfer(reverse=bool(data.get('reverse')))
+        if transfer is None:
+            return jsonify({"success": False,
+                            "error": "Both Plex servers must be configured "
+                                     "(Settings > Plex and Plex Secondary)."}), 400
+
+        if operation == 'ratings':
+            report = transfer.transfer_ratings(dry_run=dry_run)
+        else:
+            names = data.get('names') or None
+            report = transfer.transfer_playlists(dry_run=dry_run, names=names)
+
+        return jsonify({"success": True, **report.to_dict()})
+
+    except Exception as e:
+        logger.error(f"Plex transfer ({operation}) failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
 
 @app.route('/api/wishlist/remove-track', methods=['POST'])
 def remove_track_from_wishlist():

@@ -107,6 +107,18 @@ def run_service_test(service, test_config):
                 return True, f"Successfully connected to Plex server: {temp_client.server.friendlyName}"
             else:
                 return False, "Could not connect to Plex. Check URL and Token."
+        elif service == "plex_secondary":
+            cfg = config_manager.get_plex_secondary_config() or {}
+            if not cfg.get('base_url') or not cfg.get('token'):
+                return False, "Secondary Plex URL and token are required."
+            # Explicit config — this must NOT fall back to the primary server's
+            # settings, or a misconfigured secondary would report the primary's
+            # name and look connected.
+            temp_client = PlexClient(config=dict(cfg))
+            if temp_client.is_connected():
+                return True, (f"Successfully connected to secondary Plex server: "
+                              f"{temp_client.server.friendlyName}")
+            return False, "Could not connect to the secondary Plex. Check URL and Token."
         elif service == "jellyfin":
             temp_client = JellyfinClient()
             if temp_client.is_connected():

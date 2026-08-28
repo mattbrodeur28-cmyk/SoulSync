@@ -31,7 +31,16 @@ ALL_LIBRARIES_SENTINEL = '__all_libraries__'
 
 
 class PlexClient(MediaServerClient):
-    def __init__(self):
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        # ``config`` overrides the global Plex settings for THIS instance only
+        # ({'base_url': ..., 'token': ...}). Default None keeps every existing
+        # call site reading config_manager.get_plex_config() exactly as before.
+        #
+        # Added for server-to-server transfer (core/plex_transfer.py), which
+        # needs a second live connection to a DIFFERENT Plex without disturbing
+        # `active_media_server` — that single value is referenced across 80+
+        # files and is deliberately left alone.
+        self._config_override = config
         self.server: Optional[PlexServer] = None
         self.music_library: Optional[MusicSection] = None
         # When True, read methods union across every music section under
@@ -85,8 +94,8 @@ class PlexClient(MediaServerClient):
         self._last_connection_check = 0
 
     def _setup_client(self):
-        config = config_manager.get_plex_config()
-        
+        config = self._config_override or config_manager.get_plex_config()
+
         if not config.get('base_url'):
             logger.warning("Plex server URL not configured")
             return
@@ -937,6 +946,41 @@ class PlexClient(MediaServerClient):
             logger.error(f"Error searching for track '{title}' by '{artist}': {e}")
             return None
     
+    def get_all_tracks(self) -> List[PlexTrack]:
+        """Every raw plexapi Track in the configured scope.
+
+        Public wrapper over ``_all_tracks`` for consumers outside this module
+        (``core/plex_transfer.py`` builds a guid index from one sweep rather
+        than issuing a lookup per track). Raw Plex objects, not ``TrackInfo``,
+        because the caller needs ``rate()`` and ``ratingKey`` on them.
+        """
+        if not self._can_query():
+            logger.warning("Plex music library not found. Cannot enumerate tracks.")
+            return []
+        return self._all_tracks()
+
+    def set_track_rating(self, track: PlexTrack, rating: Optional[float]) -> bool:
+        """Write a user rating onto a Plex track.
+
+        Plex stores ratings 0-10 and renders them as 5 stars (7.0 = 3.5 stars);
+        10 is the "loved"/heart value, which is why a music "like" travels as a
+        rating rather than a separate flag. Values are copied verbatim — no
+        rescaling.
+
+        ``None`` is rejected rather than passed through: plexapi's
+        ``rate(None)`` CLEARS the rating, and server-to-server transfer must
+        never unrate a destination track just because the source had no rating.
+        """
+        if rating is None:
+            logger.debug("Refusing to write a None rating (that would clear it)")
+            return False
+        try:
+            track.rate(float(rating))
+            return True
+        except Exception as e:
+            logger.error(f"Failed to rate track '{getattr(track, 'title', '?')}': {e}")
+            return False
+
     def search_tracks(self, title: str, artist: str, limit: int = 15) -> List[TrackInfo]:
         """
         Searches for tracks using an efficient, multi-stage "early exit" strategy.
