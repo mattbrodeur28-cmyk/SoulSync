@@ -5563,17 +5563,55 @@ async function runPlexTransfer(operation, dryRun) {
             statusEl.style.color = '#f44336';
             return;
         }
-        let msg = data.summary || '';
-        if (data.unmatched_count > 0) {
-            const sample = (data.unmatched || []).slice(0, 3).join('; ');
-            msg += ` — unmatched e.g. ${sample}`;
-        }
-        statusEl.textContent = msg;
-        statusEl.style.color = data.unmatched_count > 0 ? '#ffb300' : '#4caf50';
+        // The run sweeps both libraries and outlives the request, so the POST
+        // only starts it — poll until it finishes.
+        _pollPlexTransfer(statusEl);
     } catch (e) {
         statusEl.textContent = 'Transfer error';
         statusEl.style.color = '#f44336';
     }
+}
+
+function _renderPlexTransferReport(report) {
+    let msg = report.summary || '';
+    if (report.source_server && report.dest_server) {
+        msg += ` — ${report.source_server} → ${report.dest_server}`;
+    }
+    if (report.unmatched_count > 0) {
+        const sample = (report.unmatched || []).slice(0, 3).join('; ');
+        msg += ` — unmatched e.g. ${sample}`;
+    }
+    return msg;
+}
+
+function _pollPlexTransfer(statusEl) {
+    if (window._plexTransferPoll) clearInterval(window._plexTransferPoll);
+    window._plexTransferPoll = setInterval(async () => {
+        try {
+            const resp = await fetch('/api/plex-transfer/status');
+            const state = await resp.json();
+            if (state.status === 'running') {
+                statusEl.style.color = '#aaa';
+                statusEl.textContent = state.phase || 'Working…';
+                return;
+            }
+            clearInterval(window._plexTransferPoll);
+            window._plexTransferPoll = null;
+            if (state.status === 'error') {
+                statusEl.textContent = state.error || 'Transfer failed';
+                statusEl.style.color = '#f44336';
+                return;
+            }
+            const report = state.report || {};
+            statusEl.textContent = _renderPlexTransferReport(report);
+            statusEl.style.color = report.unmatched_count > 0 ? '#ffb300' : '#4caf50';
+        } catch (e) {
+            clearInterval(window._plexTransferPoll);
+            window._plexTransferPoll = null;
+            statusEl.textContent = 'Lost contact with the transfer';
+            statusEl.style.color = '#f44336';
+        }
+    }, 2000);
 }
 
 function _setIndStatusDot(dotId, state) {

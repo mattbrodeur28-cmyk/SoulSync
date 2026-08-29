@@ -18753,47 +18753,106 @@ def cleanup_wishlist():
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
 
+# A transfer sweeps BOTH libraries end to end — minutes on a real library,
+# well past the 120s gunicorn worker timeout that would kill it mid-run and
+# hand the browser a dead socket. So the request only kicks it off; the UI
+# polls the status endpoint below.
+_plex_transfer_state = {
+    'status': 'idle',        # idle | running | done | error
+    'operation': '',
+    'dry_run': True,
+    'phase': '',
+    'error': None,
+    'report': None,
+}
+_plex_transfer_lock = threading.Lock()
+
+
 @app.route('/api/plex-transfer/<operation>', methods=['POST'])
 def plex_transfer(operation):
-    """Transfer playlists or ratings between two configured Plex servers.
+    """Start a playlist or rating transfer between the two Plex servers.
 
     ``operation`` is 'playlists' or 'ratings'. Body:
       dry_run  — default TRUE. Writes require an explicit false.
       reverse  — swap direction (secondary becomes the source).
       names    — playlists only: restrict to these playlist names.
 
-    Returns the TransferReport, including everything that did NOT match, so the
-    user can judge coverage before enabling writes.
+    Both servers are connected up front so a misconfiguration comes back as an
+    error on THIS request rather than as a report full of zeros. The run itself
+    happens in the background; poll ``/api/plex-transfer/status`` for the phase
+    and the finished TransferReport (which names everything that did NOT match,
+    so coverage can be judged before enabling writes).
     """
     if operation not in ('playlists', 'ratings'):
         return jsonify({"success": False,
                         "error": "operation must be 'playlists' or 'ratings'"}), 400
     try:
-        from core.plex_transfer import build_transfer
+        from core.plex_transfer import build_transfer, TransferUnavailable
 
         data = request.get_json(silent=True) or {}
         # Default TRUE: only an explicit false enables writing to a live server.
         dry_run = data.get('dry_run', True) is not False
+        names = data.get('names') or None
 
-        transfer = build_transfer(reverse=bool(data.get('reverse')))
-        if transfer is None:
-            return jsonify({"success": False,
-                            "error": "Both Plex servers must be configured "
-                                     "(Settings > Plex and Plex Secondary)."}), 400
+        with _plex_transfer_lock:
+            if _plex_transfer_state['status'] == 'running':
+                return jsonify({"success": False,
+                                "error": "A transfer is already running."}), 409
 
-        if operation == 'ratings':
-            report = transfer.transfer_ratings(dry_run=dry_run)
-        else:
-            names = data.get('names') or None
-            report = transfer.transfer_playlists(dry_run=dry_run, names=names)
+        def _phase(message):
+            with _plex_transfer_lock:
+                _plex_transfer_state['phase'] = message
 
-        return jsonify({"success": True, **report.to_dict()})
+        try:
+            transfer = build_transfer(reverse=bool(data.get('reverse')),
+                                      on_progress=_phase)
+        except TransferUnavailable as e:
+            return jsonify({"success": False, "error": str(e)}), 400
+
+        with _plex_transfer_lock:
+            _plex_transfer_state.update({
+                'status': 'running', 'operation': operation, 'dry_run': dry_run,
+                'phase': 'Starting…', 'error': None, 'report': None,
+            })
+
+        def _run():
+            try:
+                if operation == 'ratings':
+                    report = transfer.transfer_ratings(dry_run=dry_run)
+                else:
+                    report = transfer.transfer_playlists(dry_run=dry_run, names=names)
+                with _plex_transfer_lock:
+                    _plex_transfer_state.update({
+                        'status': 'done', 'phase': '', 'report': report.to_dict(),
+                    })
+            except Exception as e:
+                logger.error(f"Plex transfer ({operation}) failed: {e}")
+                import traceback
+                traceback.print_exc()
+                with _plex_transfer_lock:
+                    _plex_transfer_state.update({
+                        'status': 'error', 'phase': '', 'error': str(e),
+                    })
+
+        threading.Thread(target=_run, daemon=True,
+                         name=f"PlexTransfer-{operation}").start()
+        return jsonify({"success": True, "started": True, "operation": operation,
+                        "dry_run": dry_run}), 202
 
     except Exception as e:
-        logger.error(f"Plex transfer ({operation}) failed: {e}")
+        logger.error(f"Plex transfer ({operation}) kickoff failed: {e}")
         import traceback
         traceback.print_exc()
+        with _plex_transfer_lock:
+            _plex_transfer_state['status'] = 'idle'
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/plex-transfer/status', methods=['GET'])
+def plex_transfer_status():
+    """Poll the running (or last finished) Plex-to-Plex transfer."""
+    with _plex_transfer_lock:
+        return jsonify({"success": True, **_plex_transfer_state})
 
 
 @app.route('/api/wishlist/remove-track', methods=['POST'])

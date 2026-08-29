@@ -920,7 +920,7 @@ class PlexClient(MediaServerClient):
         return False
 
     def _find_track(self, title: str, artist: str, album: str) -> Optional[PlexTrack]:
-        if not self._can_query():
+        if not self.ensure_connection() or not self._can_query():
             return None
 
         try:
@@ -953,8 +953,13 @@ class PlexClient(MediaServerClient):
         (``core/plex_transfer.py`` builds a guid index from one sweep rather
         than issuing a lookup per track). Raw Plex objects, not ``TrackInfo``,
         because the caller needs ``rate()`` and ``ratingKey`` on them.
+
+        ``ensure_connection`` first: ``_can_query`` only reports whether a
+        library is in scope, and on a FRESH client (server-to-server transfer
+        builds two) nothing has connected yet, so checking it alone returns an
+        empty sweep that reads as "the library is empty".
         """
-        if not self._can_query():
+        if not self.ensure_connection() or not self._can_query():
             logger.warning("Plex music library not found. Cannot enumerate tracks.")
             return []
         return self._all_tracks()
@@ -986,7 +991,7 @@ class PlexClient(MediaServerClient):
         Searches for tracks using an efficient, multi-stage "early exit" strategy.
         It stops and returns results as soon as candidates are found.
         """
-        if not self._can_query():
+        if not self.ensure_connection() or not self._can_query():
             logger.warning("Plex music library not found. Cannot perform search.")
             return []
 

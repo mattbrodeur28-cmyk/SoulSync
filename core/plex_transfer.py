@@ -58,6 +58,11 @@ class TransferReport:
     unmatched: List[str] = field(default_factory=list)
     failures: List[str] = field(default_factory=list)
     playlists: List[Dict[str, Any]] = field(default_factory=list)
+    # Which server/library each side actually bound to. A transfer that reads
+    # the wrong library reports zeros exactly like one that read nothing, so
+    # the run says out loud where it looked.
+    source_server: str = ''
+    dest_server: str = ''
 
     @property
     def unmatched_count(self) -> int:
@@ -90,6 +95,8 @@ class TransferReport:
             "unmatched_count": self.unmatched_count,
             "failures": self.failures,
             "playlists": self.playlists,
+            "source_server": self.source_server,
+            "dest_server": self.dest_server,
             "summary": self.summary(),
         }
 
@@ -98,6 +105,12 @@ def _artist_of(track: Any) -> str:
     """Artist name from either a TrackInfo or a raw plexapi Track."""
     artist = getattr(track, 'artist', None)
     if callable(artist):                      # raw plexapi Track.artist()
+        # grandparentTitle rides along on the library listing already in hand.
+        # ``artist()`` is a fetchItem — one HTTP round trip PER TRACK, which on
+        # a real library turns a sweep into thousands of requests.
+        cheap = getattr(track, 'grandparentTitle', '') or ''
+        if cheap:
+            return cheap
         try:
             got = artist()
             return getattr(got, 'title', '') or ''
@@ -109,10 +122,20 @@ def _artist_of(track: Any) -> str:
 
 
 def _rating_of(track: Any) -> Optional[float]:
-    """User rating from either a TrackInfo (``rating``) or a raw Plex track."""
-    value = getattr(track, 'rating', None)
-    if value is None:
-        value = getattr(track, 'userRating', None)
+    """The USER's rating (stars), from a TrackInfo or a raw plexapi Track.
+
+    A raw plexapi ``Track`` carries BOTH ``userRating`` (what the user set,
+    0-10) and ``rating`` (the agent/critic rating). Only the first may travel.
+    So: when the object exposes ``userRating`` at all it is the only field
+    consulted — falling through to ``rating`` there would copy a critic score
+    onto the destination as if the user had set it, and would make an unrated
+    track look rated. ``TrackInfo`` has no ``userRating``; its ``rating`` field
+    is already populated from ``track.userRating``.
+    """
+    if hasattr(track, 'userRating'):
+        value = track.userRating
+    else:
+        value = getattr(track, 'rating', None)
     if value is None:
         return None
     try:
@@ -125,13 +148,53 @@ class PlexToPlexTransfer:
     """Transfers playlists and ratings from ``source`` to ``dest``."""
 
     def __init__(self, source, dest, *, match_threshold: float = DEFAULT_MATCH_THRESHOLD,
-                 matching_engine=None, logger=logger):
+                 matching_engine=None, logger=logger, on_progress=None):
         self.source = source
         self.dest = dest
         self.match_threshold = match_threshold
         self.matcher = matching_engine or MusicMatchingEngine()
         self.logger = logger
+        # Optional ``fn(str)`` phase callback. A full two-server sweep runs for
+        # minutes, so the caller needs something to show that isn't a dead
+        # spinner. Never allowed to break the run.
+        self._on_progress = on_progress
         self._guid_index: Optional[Dict[str, Any]] = None
+
+    def _progress(self, message: str) -> None:
+        if not self._on_progress:
+            return
+        try:
+            self._on_progress(message)
+        except Exception as e:
+            self.logger.debug(f"progress callback failed: {e}")
+
+    # ------------------------------------------------------------------
+    # Identity
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _describe(client) -> str:
+        """"<friendlyName> / <library>" for a PlexClient, best effort.
+
+        Both PlexClients read the SAME saved ``plex_music_library`` preference,
+        so the second server binds to a same-named library if it has one and
+        otherwise falls back to its first music section — which may not be the
+        one the user meant. Naming it in the report makes that visible instead
+        of leaving a wrong-library run looking like an empty one.
+        """
+        try:
+            server = getattr(client, 'server', None)
+            name = getattr(server, 'friendlyName', '') or '?'
+            if getattr(client, '_all_libraries_mode', False):
+                return f"{name} / All Libraries"
+            library = getattr(client, 'music_library', None)
+            return f"{name} / {getattr(library, 'title', '?')}"
+        except Exception:
+            return '?'
+
+    def _stamp(self, report: 'TransferReport') -> None:
+        report.source_server = self._describe(self.source)
+        report.dest_server = self._describe(self.dest)
 
     # ------------------------------------------------------------------
     # Destination index
@@ -142,6 +205,7 @@ class PlexToPlexTransfer:
         if self._guid_index is not None:
             return self._guid_index
 
+        self._progress("Indexing the destination library…")
         index: Dict[str, Any] = {}
         for track in self.dest.get_all_tracks() or []:
             guid = getattr(track, 'guid', None)
@@ -205,11 +269,19 @@ class PlexToPlexTransfer:
         """
         report = TransferReport(operation='ratings', dry_run=dry_run)
 
-        for src in self.source.get_all_tracks() or []:
+        self._progress("Reading the source library…")
+        source_tracks = self.source.get_all_tracks() or []
+        total = len(source_tracks)
+        self._progress(f"Read {total} source track(s)")
+
+        for seen, src in enumerate(source_tracks, 1):
             rating = _rating_of(src)
             if rating is None:
                 continue                       # never propagate "no rating"
             report.considered += 1
+            if report.considered % 25 == 0:
+                self._progress(f"Ratings: {seen}/{total} scanned, "
+                               f"{report.considered} rated, {report.matched} matched")
 
             label = f"{getattr(src, 'title', '?')} — {_artist_of(src)}"
             target, how = self.resolve(src)
@@ -231,7 +303,9 @@ class PlexToPlexTransfer:
             else:
                 report.failures.append(label)
 
-        self.logger.info(report.summary())
+        self._stamp(report)
+        self.logger.info(
+            f"{report.summary()} [{report.source_server} -> {report.dest_server}]")
         return report
 
     # ------------------------------------------------------------------
@@ -249,9 +323,14 @@ class PlexToPlexTransfer:
         report = TransferReport(operation='playlists', dry_run=dry_run)
         wanted = set(names) if names else None
 
-        for playlist in self.source.get_all_playlists() or []:
+        self._progress("Reading the source playlists…")
+        source_playlists = self.source.get_all_playlists() or []
+
+        for position, playlist in enumerate(source_playlists, 1):
             if wanted is not None and playlist.title not in wanted:
                 continue
+            self._progress(f"Playlist {position}/{len(source_playlists)}: "
+                           f"{playlist.title}")
 
             resolved, missing = [], []
             for track in playlist.tracks or []:
@@ -296,16 +375,28 @@ class PlexToPlexTransfer:
             elif f"{playlist.title}" not in report.failures:
                 report.failures.append(f"{playlist.title}: create_playlist returned False")
 
-        self.logger.info(report.summary())
+        self._stamp(report)
+        self.logger.info(
+            f"{report.summary()} [{report.source_server} -> {report.dest_server}]")
         return report
 
 
-def build_transfer(*, reverse: bool = False) -> Optional[PlexToPlexTransfer]:
+class TransferUnavailable(RuntimeError):
+    """A transfer can't start — unconfigured or unreachable server.
+
+    Raised instead of returning None so the caller can show the user WHICH
+    server is the problem. Silently handing back an empty transfer is the worst
+    outcome here: it produces a report full of zeros that looks identical to a
+    correct run over an empty library.
+    """
+
+
+def build_transfer(*, reverse: bool = False, on_progress=None) -> PlexToPlexTransfer:
     """Build a transfer from configured Plex + Plex-secondary settings.
 
-    ``reverse=True`` swaps direction (secondary becomes the source). Returns
-    None when either server is unconfigured, so callers can report that
-    plainly instead of failing mid-run.
+    ``reverse=True`` swaps direction (secondary becomes the source). Raises
+    :class:`TransferUnavailable` when a server is unconfigured or can't be
+    reached, so the failure is reported before anything is swept.
 
     Config defaults only apply to FRESH installs — an existing config row never
     gets new keys merged — so the threshold default is supplied here.
@@ -317,8 +408,8 @@ def build_transfer(*, reverse: bool = False) -> Optional[PlexToPlexTransfer]:
 
     for label, cfg in (('Plex', primary_cfg), ('Plex (secondary)', secondary_cfg)):
         if not cfg.get('base_url') or not cfg.get('token'):
-            logger.error(f"{label} is not configured (needs base_url and token)")
-            return None
+            raise TransferUnavailable(
+                f"{label} is not configured (needs a URL and a token).")
 
     threshold = config_manager.get('plex_secondary.match_threshold',
                                    DEFAULT_MATCH_THRESHOLD) or DEFAULT_MATCH_THRESHOLD
@@ -327,9 +418,25 @@ def build_transfer(*, reverse: bool = False) -> Optional[PlexToPlexTransfer]:
     primary = PlexClient()
     secondary = PlexClient(config=dict(secondary_cfg))
 
+    # Connect BOTH before returning. These are freshly constructed clients, not
+    # the app's long-lived one, so nothing has dialed them yet; an unconnected
+    # client's reads return empty rather than raising, which is what makes a
+    # broken transfer look like a successful no-op.
+    for label, client in (('Plex', primary), ('Plex (secondary)', secondary)):
+        if not client.is_connected():
+            raise TransferUnavailable(
+                f"Could not connect to {label}. Check its URL and token.")
+        if not client.is_fully_configured():
+            raise TransferUnavailable(
+                f"{label} connected but has no music library selected.")
+
     source, dest = (secondary, primary) if reverse else (primary, secondary)
-    return PlexToPlexTransfer(source, dest, match_threshold=float(threshold))
+    transfer = PlexToPlexTransfer(source, dest, match_threshold=float(threshold),
+                                  on_progress=on_progress)
+    logger.info(f"Transfer ready: {transfer._describe(source)} -> "
+                f"{transfer._describe(dest)}")
+    return transfer
 
 
-__all__ = ['PlexToPlexTransfer', 'TransferReport', 'build_transfer',
-           'DEFAULT_MATCH_THRESHOLD']
+__all__ = ['PlexToPlexTransfer', 'TransferReport', 'TransferUnavailable',
+           'build_transfer', 'DEFAULT_MATCH_THRESHOLD']
